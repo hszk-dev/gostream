@@ -93,6 +93,43 @@ services:
     networks:
       - gostream-network
 
+  api:
+    build:
+      context: .
+      dockerfile: build/api/Dockerfile
+    container_name: gostream-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      API_PORT: 8080
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-gostream}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gostream}
+      POSTGRES_DB: ${POSTGRES_DB:-gostream}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-videos}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:-gostream}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-gostream}
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - gostream-network
+
 networks:
   gostream-network:
     driver: bridge

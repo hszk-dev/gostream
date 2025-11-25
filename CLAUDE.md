@@ -144,6 +144,17 @@ PENDING_UPLOAD ──▶ PROCESSING ──▶ READY
 * **Imperative Mood:** "Add feature" (not "Added").
 * **Granularity:** Atomic commits. One logical change per commit.
 
+### Commit Granularity Guidelines
+**Split changes into appropriate commits by logical unit:**
+- Each commit should represent ONE logical change
+- Separate infrastructure changes from application code
+- Separate configuration from implementation
+- Example split for API server:
+  1. `feat: Add config management` - config package only
+  2. `feat: Add HTTP middleware` - middleware implementations
+  3. `feat: Add health check endpoint` - handler + route
+  4. `chore: Add Dockerfile and docker-compose` - infrastructure
+
 ### Pull Requests (PRs)
 
 **Template Usage:**

@@ -1,4 +1,4 @@
-.PHONY: help up down logs ps migrate-up migrate-down migrate-create clean
+.PHONY: help up down logs ps migrate-up migrate-down migrate-create clean build run test lint
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -32,3 +32,15 @@ migrate-create: ## Create new migration (usage: make migrate-create NAME=create_
 clean: ## Remove all docker data (WARNING: destructive)
 	docker compose down -v
 	rm -rf .docker-data
+
+build: ## Build Go binaries
+	go build -o bin/api ./cmd/api
+
+run: ## Run API server locally
+	go run ./cmd/api
+
+test: ## Run tests
+	go test -v -race ./...
+
+lint: ## Run linter
+	golangci-lint run ./...
