@@ -15,6 +15,10 @@ import (
 	"github.com/hszk-dev/gostream/internal/api/handler"
 	"github.com/hszk-dev/gostream/internal/api/middleware"
 	"github.com/hszk-dev/gostream/internal/config"
+	"github.com/hszk-dev/gostream/internal/infrastructure/postgres"
+	"github.com/hszk-dev/gostream/internal/infrastructure/queue"
+	"github.com/hszk-dev/gostream/internal/infrastructure/storage"
+	"github.com/hszk-dev/gostream/internal/usecase"
 )
 
 func main() {
@@ -25,6 +29,8 @@ func main() {
 }
 
 func run() error {
+	ctx := context.Background()
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
@@ -35,7 +41,41 @@ func run() error {
 	}))
 	slog.SetDefault(logger)
 
-	r := setupRouter(logger)
+	// Initialize infrastructure clients
+	pgClient, err := postgres.NewClient(ctx, postgres.DefaultClientConfig(cfg.Database.DSN()))
+	if err != nil {
+		return fmt.Errorf("failed to connect to PostgreSQL: %w", err)
+	}
+	defer pgClient.Close()
+	logger.Info("connected to PostgreSQL")
+
+	storageClient, err := storage.NewClient(ctx, storage.ClientConfig{
+		Endpoint:  cfg.MinIO.Endpoint,
+		AccessKey: cfg.MinIO.AccessKey,
+		SecretKey: cfg.MinIO.SecretKey,
+		Bucket:    cfg.MinIO.Bucket,
+		UseSSL:    cfg.MinIO.UseSSL,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to connect to MinIO: %w", err)
+	}
+	logger.Info("connected to MinIO")
+
+	queueClient, err := queue.NewClient(ctx, queue.DefaultClientConfig(cfg.RabbitMQ.URL()))
+	if err != nil {
+		return fmt.Errorf("failed to connect to RabbitMQ: %w", err)
+	}
+	defer queueClient.Close()
+	logger.Info("connected to RabbitMQ")
+
+	// Initialize repositories and services
+	videoRepo := postgres.NewVideoRepository(pgClient.Pool())
+	videoSvc := usecase.NewVideoService(videoRepo, storageClient, queueClient, usecase.DefaultVideoServiceConfig())
+
+	// Initialize handlers
+	videoHandler := handler.NewVideoHandler(videoSvc)
+
+	r := setupRouter(logger, videoHandler)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
@@ -62,10 +102,10 @@ func run() error {
 		logger.Info("shutting down server", slog.String("signal", sig.String()))
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer cancel()
 
-	if err := srv.Shutdown(ctx); err != nil {
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("server shutdown error: %w", err)
 	}
 
@@ -73,7 +113,7 @@ func run() error {
 	return nil
 }
 
-func setupRouter(logger *slog.Logger) *chi.Mux {
+func setupRouter(logger *slog.Logger, videoHandler *handler.VideoHandler) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(chimw.RequestID)
@@ -84,7 +124,11 @@ func setupRouter(logger *slog.Logger) *chi.Mux {
 	r.Get("/health", handler.Health)
 
 	r.Route("/v1", func(r chi.Router) {
-		// Video endpoints will be added in subsequent PRs
+		r.Route("/videos", func(r chi.Router) {
+			r.Post("/", videoHandler.Create)
+			r.Post("/{id}/process", videoHandler.TriggerProcess)
+			r.Get("/{id}", videoHandler.Get)
+		})
 	})
 
 	return r
