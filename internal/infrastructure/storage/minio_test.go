@@ -15,13 +15,48 @@ import (
 	"github.com/hszk-dev/gostream/internal/domain/repository"
 )
 
+// mockObjectReader implements objectReader interface for testing.
+type mockObjectReader struct {
+	readFunc  func(p []byte) (n int, err error)
+	closeFunc func() error
+	statFunc  func() (minio.ObjectInfo, error)
+	data      []byte
+	offset    int
+}
+
+func (m *mockObjectReader) Read(p []byte) (n int, err error) {
+	if m.readFunc != nil {
+		return m.readFunc(p)
+	}
+	if m.offset >= len(m.data) {
+		return 0, io.EOF
+	}
+	n = copy(p, m.data[m.offset:])
+	m.offset += n
+	return n, nil
+}
+
+func (m *mockObjectReader) Close() error {
+	if m.closeFunc != nil {
+		return m.closeFunc()
+	}
+	return nil
+}
+
+func (m *mockObjectReader) Stat() (minio.ObjectInfo, error) {
+	if m.statFunc != nil {
+		return m.statFunc()
+	}
+	return minio.ObjectInfo{}, nil
+}
+
 // mockMinioClient implements minioClient interface for testing.
 type mockMinioClient struct {
 	bucketExistsFunc       func(ctx context.Context, bucketName string) (bool, error)
 	presignedPutObjectFunc func(ctx context.Context, bucketName, objectName string, expiry time.Duration) (*url.URL, error)
 	presignedGetObjectFunc func(ctx context.Context, bucketName, objectName string, expiry time.Duration, reqParams url.Values) (*url.URL, error)
 	putObjectFunc          func(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error)
-	getObjectFunc          func(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (*minio.Object, error)
+	getObjectFunc          func(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (objectReader, error)
 	removeObjectFunc       func(ctx context.Context, bucketName, objectName string, opts minio.RemoveObjectOptions) error
 	statObjectFunc         func(ctx context.Context, bucketName, objectName string, opts minio.StatObjectOptions) (minio.ObjectInfo, error)
 }
@@ -54,7 +89,7 @@ func (m *mockMinioClient) PutObject(ctx context.Context, bucketName, objectName 
 	return minio.UploadInfo{}, nil
 }
 
-func (m *mockMinioClient) GetObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (*minio.Object, error) {
+func (m *mockMinioClient) GetObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (objectReader, error) {
 	if m.getObjectFunc != nil {
 		return m.getObjectFunc(ctx, bucketName, objectName, opts)
 	}
@@ -305,6 +340,113 @@ func TestClient_Upload(t *testing.T) {
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Upload() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestClient_Download(t *testing.T) {
+	tests := []struct {
+		name        string
+		key         string
+		mockClient  *mockMinioClient
+		wantContent string
+		wantErr     error
+	}{
+		{
+			name: "successful download",
+			key:  "uploads/video-123/original.mp4",
+			mockClient: &mockMinioClient{
+				getObjectFunc: func(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (objectReader, error) {
+					return &mockObjectReader{
+						data: []byte("video content"),
+						statFunc: func() (minio.ObjectInfo, error) {
+							return minio.ObjectInfo{Key: objectName, Size: 13}, nil
+						},
+					}, nil
+				},
+			},
+			wantContent: "video content",
+			wantErr:     nil,
+		},
+		{
+			name: "object not found",
+			key:  "uploads/video-123/nonexistent.mp4",
+			mockClient: &mockMinioClient{
+				getObjectFunc: func(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (objectReader, error) {
+					return &mockObjectReader{
+						statFunc: func() (minio.ObjectInfo, error) {
+							return minio.ObjectInfo{}, minio.ErrorResponse{Code: "NoSuchKey"}
+						},
+					}, nil
+				},
+			},
+			wantContent: "",
+			wantErr:     repository.ErrObjectNotFound,
+		},
+		{
+			name: "get object error",
+			key:  "uploads/video-123/original.mp4",
+			mockClient: &mockMinioClient{
+				getObjectFunc: func(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (objectReader, error) {
+					return nil, errors.New("connection refused")
+				},
+			},
+			wantContent: "",
+			wantErr:     errors.New("failed to get object"),
+		},
+		{
+			name: "stat error",
+			key:  "uploads/video-123/original.mp4",
+			mockClient: &mockMinioClient{
+				getObjectFunc: func(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (objectReader, error) {
+					return &mockObjectReader{
+						statFunc: func() (minio.ObjectInfo, error) {
+							return minio.ObjectInfo{}, errors.New("stat failed")
+						},
+					}, nil
+				},
+			},
+			wantContent: "",
+			wantErr:     errors.New("failed to stat object"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &Client{
+				client: tt.mockClient,
+				bucket: "videos",
+			}
+
+			reader, err := client.Download(context.Background(), tt.key)
+
+			if tt.wantErr != nil {
+				if err == nil {
+					t.Errorf("Download() expected error, got nil")
+					return
+				}
+				if !errors.Is(err, tt.wantErr) && !strings.Contains(err.Error(), tt.wantErr.Error()) {
+					t.Errorf("Download() error = %v, wantErr %v", err, tt.wantErr)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("Download() unexpected error = %v", err)
+				return
+			}
+
+			defer reader.Close()
+
+			content, err := io.ReadAll(reader)
+			if err != nil {
+				t.Errorf("failed to read content: %v", err)
+				return
+			}
+
+			if string(content) != tt.wantContent {
+				t.Errorf("Download() content = %v, want %v", string(content), tt.wantContent)
 			}
 		})
 	}

@@ -13,6 +13,13 @@ import (
 	"github.com/hszk-dev/gostream/internal/domain/repository"
 )
 
+// objectReader abstracts minio.Object for testability.
+// *minio.Object satisfies this interface.
+type objectReader interface {
+	io.ReadCloser
+	Stat() (minio.ObjectInfo, error)
+}
+
 // minioClient defines the interface for MinIO operations.
 // This abstraction allows for easier unit testing with mocks.
 type minioClient interface {
@@ -20,9 +27,44 @@ type minioClient interface {
 	PresignedPutObject(ctx context.Context, bucketName, objectName string, expiry time.Duration) (*url.URL, error)
 	PresignedGetObject(ctx context.Context, bucketName, objectName string, expiry time.Duration, reqParams url.Values) (*url.URL, error)
 	PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error)
-	GetObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (*minio.Object, error)
+	GetObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (objectReader, error)
 	RemoveObject(ctx context.Context, bucketName, objectName string, opts minio.RemoveObjectOptions) error
 	StatObject(ctx context.Context, bucketName, objectName string, opts minio.StatObjectOptions) (minio.ObjectInfo, error)
+}
+
+// minioClientAdapter wraps *minio.Client to implement minioClient interface.
+// This is necessary because *minio.Client.GetObject returns *minio.Object,
+// but our interface returns objectReader for testability.
+type minioClientAdapter struct {
+	client *minio.Client
+}
+
+func (a *minioClientAdapter) BucketExists(ctx context.Context, bucketName string) (bool, error) {
+	return a.client.BucketExists(ctx, bucketName)
+}
+
+func (a *minioClientAdapter) PresignedPutObject(ctx context.Context, bucketName, objectName string, expiry time.Duration) (*url.URL, error) {
+	return a.client.PresignedPutObject(ctx, bucketName, objectName, expiry)
+}
+
+func (a *minioClientAdapter) PresignedGetObject(ctx context.Context, bucketName, objectName string, expiry time.Duration, reqParams url.Values) (*url.URL, error) {
+	return a.client.PresignedGetObject(ctx, bucketName, objectName, expiry, reqParams)
+}
+
+func (a *minioClientAdapter) PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error) {
+	return a.client.PutObject(ctx, bucketName, objectName, reader, objectSize, opts)
+}
+
+func (a *minioClientAdapter) GetObject(ctx context.Context, bucketName, objectName string, opts minio.GetObjectOptions) (objectReader, error) {
+	return a.client.GetObject(ctx, bucketName, objectName, opts)
+}
+
+func (a *minioClientAdapter) RemoveObject(ctx context.Context, bucketName, objectName string, opts minio.RemoveObjectOptions) error {
+	return a.client.RemoveObject(ctx, bucketName, objectName, opts)
+}
+
+func (a *minioClientAdapter) StatObject(ctx context.Context, bucketName, objectName string, opts minio.StatObjectOptions) (minio.ObjectInfo, error) {
+	return a.client.StatObject(ctx, bucketName, objectName, opts)
 }
 
 // ClientConfig holds configuration for the MinIO client.
@@ -51,7 +93,8 @@ func NewClient(ctx context.Context, cfg ClientConfig) (*Client, error) {
 		return nil, fmt.Errorf("failed to create minio client: %w", err)
 	}
 
-	return newClientWithMinioClient(ctx, client, cfg.Bucket)
+	adapter := &minioClientAdapter{client: client}
+	return newClientWithMinioClient(ctx, adapter, cfg.Bucket)
 }
 
 // newClientWithMinioClient creates a Client with a given minioClient implementation.
