@@ -23,6 +23,7 @@ require (
 	github.com/minio/minio-go/v7 v7.0.97 // indirect
 	github.com/pashagolub/pgxmock/v4 v4.9.0 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
+	github.com/rabbitmq/amqp091-go v1.10.0 // indirect
 	github.com/rs/xid v1.6.0 // indirect
 	github.com/tinylib/msgp v1.3.0 // indirect
 	golang.org/x/crypto v0.37.0 // indirect
