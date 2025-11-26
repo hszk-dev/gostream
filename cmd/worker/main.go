@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/hszk-dev/gostream/internal/config"
@@ -89,11 +90,17 @@ func run() error {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
+	// WaitGroup to track in-flight tasks
+	var wg sync.WaitGroup
+
 	// Start consuming messages in a goroutine
 	errCh := make(chan error, 1)
 	go func() {
 		logger.Info("starting worker, consuming transcode tasks")
 		err := queueClient.ConsumeTranscodeTasks(ctx, func(task repository.TranscodeTask) error {
+			wg.Add(1)
+			defer wg.Done()
+
 			logger.Info("processing task",
 				slog.String("video_id", task.VideoID.String()),
 				slog.Int("retry_count", task.RetryCount),
@@ -134,8 +141,16 @@ func run() error {
 	cancel()
 
 	// Wait for in-flight tasks to complete (or timeout)
-	<-shutdownCtx.Done()
-	if shutdownCtx.Err() == context.DeadlineExceeded {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		logger.Info("all in-flight tasks completed")
+	case <-shutdownCtx.Done():
 		logger.Warn("shutdown timeout exceeded, some tasks may not have completed")
 	}
 
