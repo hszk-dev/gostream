@@ -38,11 +38,12 @@ func (c DatabaseConfig) DSN() string {
 }
 
 type MinIOConfig struct {
-	Endpoint  string `envconfig:"MINIO_ENDPOINT" default:"localhost:9000"`
-	AccessKey string `envconfig:"MINIO_ACCESS_KEY" default:"minioadmin"`
-	SecretKey string `envconfig:"MINIO_SECRET_KEY" default:"minioadmin"`
-	Bucket    string `envconfig:"MINIO_BUCKET" default:"videos"`
-	UseSSL    bool   `envconfig:"MINIO_USE_SSL" default:"false"`
+	Endpoint       string `envconfig:"MINIO_ENDPOINT" default:"localhost:9000"`
+	PublicEndpoint string `envconfig:"MINIO_PUBLIC_ENDPOINT"` // Optional: external-facing endpoint for presigned URLs
+	AccessKey      string `envconfig:"MINIO_ACCESS_KEY" default:"minioadmin"`
+	SecretKey      string `envconfig:"MINIO_SECRET_KEY" default:"minioadmin"`
+	Bucket         string `envconfig:"MINIO_BUCKET" default:"videos"`
+	UseSSL         bool   `envconfig:"MINIO_USE_SSL" default:"false"`
 }
 
 type RabbitMQConfig struct {

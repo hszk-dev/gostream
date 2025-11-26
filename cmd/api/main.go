@@ -50,11 +50,12 @@ func run() error {
 	logger.Info("connected to PostgreSQL")
 
 	storageClient, err := storage.NewClient(ctx, storage.ClientConfig{
-		Endpoint:  cfg.MinIO.Endpoint,
-		AccessKey: cfg.MinIO.AccessKey,
-		SecretKey: cfg.MinIO.SecretKey,
-		Bucket:    cfg.MinIO.Bucket,
-		UseSSL:    cfg.MinIO.UseSSL,
+		Endpoint:       cfg.MinIO.Endpoint,
+		PublicEndpoint: cfg.MinIO.PublicEndpoint,
+		AccessKey:      cfg.MinIO.AccessKey,
+		SecretKey:      cfg.MinIO.SecretKey,
+		Bucket:         cfg.MinIO.Bucket,
+		UseSSL:         cfg.MinIO.UseSSL,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to connect to MinIO: %w", err)

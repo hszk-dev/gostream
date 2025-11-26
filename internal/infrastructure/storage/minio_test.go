@@ -151,7 +151,7 @@ func TestNewClientWithMinioClient(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client, err := newClientWithMinioClient(context.Background(), tt.mockClient, tt.bucket)
+			client, err := newClientWithMinioClient(context.Background(), tt.mockClient, tt.mockClient, tt.bucket)
 
 			if tt.wantErr != nil {
 				if err == nil {
@@ -215,8 +215,9 @@ func TestClient_GeneratePresignedUploadURL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := &Client{
-				client: tt.mockClient,
-				bucket: "videos",
+				client:          tt.mockClient,
+				presignedClient: tt.mockClient,
+				bucket:          "videos",
 			}
 
 			got, err := client.GeneratePresignedUploadURL(context.Background(), tt.key, tt.expiry)
@@ -230,6 +231,36 @@ func TestClient_GeneratePresignedUploadURL(t *testing.T) {
 				t.Errorf("GeneratePresignedUploadURL() = %v, want %v", got, tt.wantURL)
 			}
 		})
+	}
+}
+
+func TestClient_GeneratePresignedUploadURL_WithPublicEndpoint(t *testing.T) {
+	// Simulates internal client returning minio:9000 URLs
+	internalMock := &mockMinioClient{}
+
+	// Simulates presigned client configured with public endpoint
+	publicMock := &mockMinioClient{
+		presignedPutObjectFunc: func(ctx context.Context, bucketName, objectName string, expiry time.Duration) (*url.URL, error) {
+			u, _ := url.Parse("http://localhost:9000/videos/uploads/video-123/original.mp4?X-Amz-Signature=abc123")
+			return u, nil
+		},
+	}
+
+	client := &Client{
+		client:          internalMock,
+		presignedClient: publicMock,
+		bucket:          "videos",
+	}
+
+	got, err := client.GeneratePresignedUploadURL(context.Background(), "uploads/video-123/original.mp4", 15*time.Minute)
+	if err != nil {
+		t.Errorf("GeneratePresignedUploadURL() unexpected error = %v", err)
+		return
+	}
+
+	want := "http://localhost:9000/videos/uploads/video-123/original.mp4?X-Amz-Signature=abc123"
+	if got != want {
+		t.Errorf("GeneratePresignedUploadURL() = %v, want %v", got, want)
 	}
 }
 
@@ -272,8 +303,9 @@ func TestClient_GeneratePresignedDownloadURL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := &Client{
-				client: tt.mockClient,
-				bucket: "videos",
+				client:          tt.mockClient,
+				presignedClient: tt.mockClient,
+				bucket:          "videos",
 			}
 
 			got, err := client.GeneratePresignedDownloadURL(context.Background(), tt.key, tt.expiry)
