@@ -13,6 +13,8 @@ type Config struct {
 	Database DatabaseConfig
 	MinIO    MinIOConfig
 	RabbitMQ RabbitMQConfig
+	Redis    RedisConfig
+	CDN      CDNConfig
 }
 
 type ServerConfig struct {
@@ -59,6 +61,22 @@ type RabbitMQConfig struct {
 	User     string `envconfig:"RABBITMQ_USER" default:"gostream"`
 	Password string `envconfig:"RABBITMQ_PASSWORD" default:"gostream"`
 	VHost    string `envconfig:"RABBITMQ_VHOST" default:"/"`
+}
+
+type RedisConfig struct {
+	Host     string        `envconfig:"REDIS_HOST" default:"localhost"`
+	Port     int           `envconfig:"REDIS_PORT" default:"6379"`
+	Password string        `envconfig:"REDIS_PASSWORD" default:""`
+	DB       int           `envconfig:"REDIS_DB" default:"0"`
+	TTL      time.Duration `envconfig:"REDIS_TTL" default:"5m"`
+}
+
+func (c RedisConfig) Addr() string {
+	return fmt.Sprintf("%s:%d", c.Host, c.Port)
+}
+
+type CDNConfig struct {
+	BaseURL string `envconfig:"CDN_BASE_URL" default:"http://localhost:8081"`
 }
 
 func (c RabbitMQConfig) URL() string {
