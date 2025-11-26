@@ -69,21 +69,24 @@ func (a *minioClientAdapter) StatObject(ctx context.Context, bucketName, objectN
 
 // ClientConfig holds configuration for the MinIO client.
 type ClientConfig struct {
-	Endpoint  string
-	AccessKey string
-	SecretKey string
-	Bucket    string
-	UseSSL    bool
+	Endpoint       string
+	PublicEndpoint string // Optional: external-facing endpoint for presigned URLs
+	AccessKey      string
+	SecretKey      string
+	Bucket         string
+	UseSSL         bool
 }
 
 // Client wraps a MinIO client and implements repository.ObjectStorage.
 type Client struct {
-	client minioClient
-	bucket string
+	client          minioClient
+	presignedClient minioClient // Separate client for presigned URLs (may use public endpoint)
+	bucket          string
 }
 
 // NewClient creates a new MinIO client.
 // It verifies the bucket exists during initialization to fail fast on misconfiguration.
+// If PublicEndpoint is set, a separate client is created for presigned URL generation.
 func NewClient(ctx context.Context, cfg ClientConfig) (*Client, error) {
 	client, err := minio.New(cfg.Endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
@@ -94,12 +97,26 @@ func NewClient(ctx context.Context, cfg ClientConfig) (*Client, error) {
 	}
 
 	adapter := &minioClientAdapter{client: client}
-	return newClientWithMinioClient(ctx, adapter, cfg.Bucket)
+
+	// Create a separate client for presigned URLs if public endpoint is configured
+	var presignedAdapter minioClient = adapter
+	if cfg.PublicEndpoint != "" {
+		presignedClient, err := minio.New(cfg.PublicEndpoint, &minio.Options{
+			Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
+			Secure: cfg.UseSSL,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create presigned minio client: %w", err)
+		}
+		presignedAdapter = &minioClientAdapter{client: presignedClient}
+	}
+
+	return newClientWithMinioClient(ctx, adapter, presignedAdapter, cfg.Bucket)
 }
 
 // newClientWithMinioClient creates a Client with a given minioClient implementation.
 // This is used for dependency injection in tests.
-func newClientWithMinioClient(ctx context.Context, client minioClient, bucket string) (*Client, error) {
+func newClientWithMinioClient(ctx context.Context, client, presignedClient minioClient, bucket string) (*Client, error) {
 	exists, err := client.BucketExists(ctx, bucket)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check bucket existence: %w", err)
@@ -109,14 +126,16 @@ func newClientWithMinioClient(ctx context.Context, client minioClient, bucket st
 	}
 
 	return &Client{
-		client: client,
-		bucket: bucket,
+		client:          client,
+		presignedClient: presignedClient,
+		bucket:          bucket,
 	}, nil
 }
 
 // GeneratePresignedUploadURL creates a presigned URL for direct client upload.
+// Uses presignedClient which may be configured with a public endpoint.
 func (c *Client) GeneratePresignedUploadURL(ctx context.Context, key string, expiry time.Duration) (string, error) {
-	presignedURL, err := c.client.PresignedPutObject(ctx, c.bucket, key, expiry)
+	presignedURL, err := c.presignedClient.PresignedPutObject(ctx, c.bucket, key, expiry)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate presigned upload URL: %w", err)
 	}
@@ -124,9 +143,10 @@ func (c *Client) GeneratePresignedUploadURL(ctx context.Context, key string, exp
 }
 
 // GeneratePresignedDownloadURL creates a presigned URL for downloading an object.
+// Uses presignedClient which may be configured with a public endpoint.
 func (c *Client) GeneratePresignedDownloadURL(ctx context.Context, key string, expiry time.Duration) (string, error) {
 	reqParams := make(url.Values)
-	presignedURL, err := c.client.PresignedGetObject(ctx, c.bucket, key, expiry, reqParams)
+	presignedURL, err := c.presignedClient.PresignedGetObject(ctx, c.bucket, key, expiry, reqParams)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate presigned download URL: %w", err)
 	}
