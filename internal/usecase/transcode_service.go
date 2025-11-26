@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/hszk-dev/gostream/internal/domain/model"
@@ -75,7 +75,12 @@ func (s *transcodeService) ProcessTask(ctx context.Context, task repository.Tran
 	// Check if max retries exceeded - mark as failed and return nil (ack the message)
 	if task.RetryCount >= s.maxRetries {
 		if err := s.markVideoFailed(ctx, task.VideoID); err != nil {
-			// Log error but still return nil to ack the message
+			slog.Error("failed to mark video as failed",
+				"video_id", task.VideoID,
+				"retry_count", task.RetryCount,
+				"error", err,
+			)
+			// Still return nil to ack the message
 			// The video remains in PROCESSING state, which is acceptable
 			return nil
 		}
@@ -141,7 +146,7 @@ func (s *transcodeService) downloadOriginal(ctx context.Context, key, workDir st
 	if err != nil {
 		return "", fmt.Errorf("storage download: %w", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	// Extract filename from key or use default
 	filename := filepath.Base(key)
@@ -154,10 +159,14 @@ func (s *transcodeService) downloadOriginal(ctx context.Context, key, workDir st
 	if err != nil {
 		return "", fmt.Errorf("create local file: %w", err)
 	}
-	defer file.Close()
 
 	if _, err := io.Copy(file, reader); err != nil {
+		_ = file.Close()
 		return "", fmt.Errorf("copy to local file: %w", err)
+	}
+
+	if err := file.Close(); err != nil {
+		return "", fmt.Errorf("close local file: %w", err)
 	}
 
 	return localPath, nil
@@ -189,7 +198,7 @@ func (s *transcodeService) uploadFile(ctx context.Context, localPath, key, conte
 	if err != nil {
 		return fmt.Errorf("open file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	if err := s.storage.Upload(ctx, key, file, contentType); err != nil {
 		return fmt.Errorf("storage upload: %w", err)
@@ -244,13 +253,4 @@ func (s *transcodeService) markVideoFailed(ctx context.Context, videoID uuid.UUI
 	}
 
 	return nil
-}
-
-// getFileExtension extracts the file extension from a key/path.
-func getFileExtension(key string) string {
-	ext := filepath.Ext(key)
-	if ext == "" {
-		return ".mp4"
-	}
-	return strings.ToLower(ext)
 }

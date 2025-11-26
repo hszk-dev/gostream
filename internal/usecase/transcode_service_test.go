@@ -16,6 +16,14 @@ import (
 	"github.com/hszk-dev/gostream/internal/transcoder"
 )
 
+// mustWriteFile is a test helper that writes a file and fails the test on error.
+func mustWriteFile(t *testing.T, path string, data []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("failed to write test file %s: %v", path, err)
+	}
+}
+
 func TestDefaultTranscodeServiceConfig(t *testing.T) {
 	cfg := DefaultTranscodeServiceConfig()
 
@@ -75,8 +83,8 @@ func TestTranscodeService_ProcessTask_Success(t *testing.T) {
 			manifestPath := filepath.Join(outputDir, "playlist.m3u8")
 			segmentPath := filepath.Join(outputDir, "segment_000.ts")
 
-			os.WriteFile(manifestPath, []byte("#EXTM3U\n"), 0644)
-			os.WriteFile(segmentPath, []byte("mock segment data"), 0644)
+			mustWriteFile(t, manifestPath, []byte("#EXTM3U\n"))
+			mustWriteFile(t, segmentPath, []byte("mock segment data"))
 
 			return &transcoder.HLSOutput{
 				ManifestPath: manifestPath,
@@ -307,7 +315,7 @@ func TestTranscodeService_ProcessTask_UploadError(t *testing.T) {
 	tc := &mockTranscoder{
 		transcodeToHLSFn: func(ctx context.Context, inputPath, outputDir string) (*transcoder.HLSOutput, error) {
 			manifestPath := filepath.Join(outputDir, "playlist.m3u8")
-			os.WriteFile(manifestPath, []byte("#EXTM3U\n"), 0644)
+			mustWriteFile(t, manifestPath, []byte("#EXTM3U\n"))
 			return &transcoder.HLSOutput{
 				ManifestPath: manifestPath,
 				SegmentPaths: []string{},
@@ -372,8 +380,8 @@ func TestTranscodeService_ProcessTask_VideoNotInProcessingState(t *testing.T) {
 		transcodeToHLSFn: func(ctx context.Context, inputPath, outputDir string) (*transcoder.HLSOutput, error) {
 			manifestPath := filepath.Join(outputDir, "playlist.m3u8")
 			segmentPath := filepath.Join(outputDir, "segment_000.ts")
-			os.WriteFile(manifestPath, []byte("#EXTM3U\n"), 0644)
-			os.WriteFile(segmentPath, []byte("mock segment"), 0644)
+			mustWriteFile(t, manifestPath, []byte("#EXTM3U\n"))
+			mustWriteFile(t, segmentPath, []byte("mock segment"))
 			return &transcoder.HLSOutput{
 				ManifestPath: manifestPath,
 				SegmentPaths: []string{segmentPath},
@@ -406,24 +414,72 @@ func TestTranscodeService_ProcessTask_VideoNotInProcessingState(t *testing.T) {
 	}
 }
 
-func TestGetFileExtension(t *testing.T) {
-	tests := []struct {
-		key      string
-		expected string
-	}{
-		{"video.mp4", ".mp4"},
-		{"video.MP4", ".mp4"},
-		{"path/to/video.mov", ".mov"},
-		{"no-extension", ".mp4"},
-		{"", ".mp4"},
+func TestTranscodeService_ProcessTask_DBUpdateError(t *testing.T) {
+	ctx := context.Background()
+	videoID := uuid.New()
+
+	video := &model.Video{
+		ID:          videoID,
+		UserID:      uuid.New(),
+		Title:       "Test Video",
+		Status:      model.StatusProcessing,
+		OriginalURL: "originals/" + videoID.String() + "/video.mp4",
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.key, func(t *testing.T) {
-			got := getFileExtension(tt.key)
-			if got != tt.expected {
-				t.Errorf("getFileExtension(%q): got %q, expected %q", tt.key, got, tt.expected)
-			}
-		})
+	repo := &mockVideoRepository{
+		getByIDFn: func(ctx context.Context, id uuid.UUID) (*model.Video, error) {
+			return video, nil
+		},
+		updateFn: func(ctx context.Context, v *model.Video) error {
+			return errors.New("database connection lost")
+		},
+	}
+
+	storage := &mockObjectStorage{
+		downloadFn: func(ctx context.Context, key string) (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader("fake video data")), nil
+		},
+		uploadFn: func(ctx context.Context, key string, reader io.Reader, contentType string) error {
+			return nil
+		},
+	}
+
+	tc := &mockTranscoder{
+		transcodeToHLSFn: func(ctx context.Context, inputPath, outputDir string) (*transcoder.HLSOutput, error) {
+			manifestPath := filepath.Join(outputDir, "playlist.m3u8")
+			segmentPath := filepath.Join(outputDir, "segment_000.ts")
+			mustWriteFile(t, manifestPath, []byte("#EXTM3U\n"))
+			mustWriteFile(t, segmentPath, []byte("mock segment"))
+			return &transcoder.HLSOutput{
+				ManifestPath: manifestPath,
+				SegmentPaths: []string{segmentPath},
+			}, nil
+		},
+	}
+
+	cfg := TranscodeServiceConfig{
+		TempDir:    t.TempDir(),
+		MaxRetries: 3,
+	}
+	svc := NewTranscodeService(repo, storage, tc, cfg)
+
+	task := repository.TranscodeTask{
+		VideoID:     videoID,
+		OriginalKey: "originals/" + videoID.String() + "/video.mp4",
+		OutputKey:   "hls/" + videoID.String() + "/",
+		RetryCount:  0,
+	}
+
+	// Should return error to trigger retry
+	err := svc.ProcessTask(ctx, task)
+	if err == nil {
+		t.Error("expected error for DB update failure")
+	}
+
+	// Verify error message contains context
+	if !strings.Contains(err.Error(), "update video status") {
+		t.Errorf("error should indicate update failure, got: %v", err)
 	}
 }
