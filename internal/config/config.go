@@ -9,6 +9,7 @@ import (
 
 type Config struct {
 	Server   ServerConfig
+	Worker   WorkerConfig
 	Database DatabaseConfig
 	MinIO    MinIOConfig
 	RabbitMQ RabbitMQConfig
@@ -19,6 +20,12 @@ type ServerConfig struct {
 	ReadTimeout     time.Duration `envconfig:"API_READ_TIMEOUT" default:"10s"`
 	WriteTimeout    time.Duration `envconfig:"API_WRITE_TIMEOUT" default:"30s"`
 	ShutdownTimeout time.Duration `envconfig:"API_SHUTDOWN_TIMEOUT" default:"10s"`
+}
+
+type WorkerConfig struct {
+	TempDir         string        `envconfig:"WORKER_TEMP_DIR" default:"/tmp/gostream"`
+	MaxRetries      int           `envconfig:"WORKER_MAX_RETRIES" default:"3"`
+	ShutdownTimeout time.Duration `envconfig:"WORKER_SHUTDOWN_TIMEOUT" default:"30s"`
 }
 
 type DatabaseConfig struct {
