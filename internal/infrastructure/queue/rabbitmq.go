@@ -141,7 +141,10 @@ func (c *Client) PublishTranscodeTask(ctx context.Context, task repository.Trans
 // Ack/Nack strategy:
 //   - Successful processing: Ack
 //   - JSON unmarshal failure: Nack without requeue (malformed message)
-//   - Handler failure: Nack with requeue (retry later)
+//   - Handler failure: Increment RetryCount, republish as new message, Ack original
+//
+// Note: We don't use Nack(requeue=true) for retries because it would put the
+// same message back without incrementing RetryCount, causing an infinite loop.
 func (c *Client) ConsumeTranscodeTasks(ctx context.Context, handler func(task repository.TranscodeTask) error) error {
 	msgs, err := c.channel.Consume(
 		c.config.QueueName,
@@ -173,8 +176,16 @@ func (c *Client) ConsumeTranscodeTasks(ctx context.Context, handler func(task re
 			}
 
 			if err := handler(task); err != nil {
-				// Processing failed - requeue for retry
-				_ = msg.Nack(false, true)
+				// Processing failed - increment retry count and republish
+				task.RetryCount++
+				if pubErr := c.PublishTranscodeTask(ctx, task); pubErr != nil {
+					// Republish failed - discard message to prevent infinite loop
+					// The video will remain in PROCESSING state for manual investigation
+					_ = msg.Nack(false, false)
+				} else {
+					// Republish succeeded - ack original message
+					_ = msg.Ack(false)
+				}
 				continue
 			}
 

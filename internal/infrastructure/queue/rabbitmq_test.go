@@ -316,118 +316,186 @@ func TestClient_ConsumeTranscodeTasks_MessageHandling(t *testing.T) {
 		VideoID:     uuid.MustParse("550e8400-e29b-41d4-a716-446655440000"),
 		OriginalKey: "uploads/video-123/original.mp4",
 		OutputKey:   "hls/video-123/",
+		RetryCount:  0,
 	}
 	taskBody, _ := json.Marshal(task)
 
-	tests := []struct {
-		name            string
-		messageBody     []byte
-		handlerErr      error
-		expectAck       bool
-		expectNack      bool
-		expectRequeue   bool
-		handlerReceived *repository.TranscodeTask
-	}{
-		{
-			name:          "successful message processing",
-			messageBody:   taskBody,
-			handlerErr:    nil,
-			expectAck:     true,
-			expectNack:    false,
-			expectRequeue: false,
-		},
-		{
-			name:          "malformed JSON - nack without requeue",
-			messageBody:   []byte("invalid json"),
-			handlerErr:    nil,
-			expectAck:     false,
-			expectNack:    true,
-			expectRequeue: false,
-		},
-		{
-			name:          "handler error - nack with requeue",
-			messageBody:   taskBody,
-			handlerErr:    errors.New("processing failed"),
-			expectAck:     false,
-			expectNack:    true,
-			expectRequeue: true,
-		},
-	}
+	t.Run("successful message processing", func(t *testing.T) {
+		deliveries := make(chan amqp.Delivery, 1)
+		ackCalled := false
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			deliveries := make(chan amqp.Delivery, 1)
-			ackCalled := false
-			nackCalled := false
-			nackRequeue := false
-
-			// Create a delivery with mock acknowledger
-			delivery := amqp.Delivery{
-				Body: tt.messageBody,
-				Acknowledger: &mockAcknowledger{
-					ackFunc: func(tag uint64, multiple bool) error {
-						ackCalled = true
-						return nil
-					},
-					nackFunc: func(tag uint64, multiple bool, requeue bool) error {
-						nackCalled = true
-						nackRequeue = requeue
-						return nil
-					},
+		delivery := amqp.Delivery{
+			Body: taskBody,
+			Acknowledger: &mockAcknowledger{
+				ackFunc: func(tag uint64, multiple bool) error {
+					ackCalled = true
+					return nil
 				},
-			}
-			deliveries <- delivery
+			},
+		}
+		deliveries <- delivery
 
-			mockCh := &mockChannel{
-				consumeFunc: func(queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args amqp.Table) (<-chan amqp.Delivery, error) {
-					return deliveries, nil
-				},
-			}
+		mockCh := &mockChannel{
+			consumeFunc: func(queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args amqp.Table) (<-chan amqp.Delivery, error) {
+				return deliveries, nil
+			},
+		}
 
-			client := &Client{
-				channel: mockCh,
-				config: ClientConfig{
-					QueueName: "transcode_tasks",
-				},
-			}
+		client := &Client{
+			channel: mockCh,
+			config:  ClientConfig{QueueName: "transcode_tasks"},
+		}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-			defer cancel()
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
 
-			var receivedTask repository.TranscodeTask
-			handler := func(task repository.TranscodeTask) error {
-				receivedTask = task
-				return tt.handlerErr
-			}
-
-			// Run consumer (will exit on context timeout)
-			_ = client.ConsumeTranscodeTasks(ctx, handler)
-
-			// Verify acknowledgement behavior
-			if tt.expectAck && !ackCalled {
-				t.Error("expected Ack to be called, but it wasn't")
-			}
-			if !tt.expectAck && ackCalled {
-				t.Error("expected Ack not to be called, but it was")
-			}
-			if tt.expectNack && !nackCalled {
-				t.Error("expected Nack to be called, but it wasn't")
-			}
-			if !tt.expectNack && nackCalled {
-				t.Error("expected Nack not to be called, but it was")
-			}
-			if tt.expectNack && tt.expectRequeue != nackRequeue {
-				t.Errorf("Nack requeue = %v, want %v", nackRequeue, tt.expectRequeue)
-			}
-
-			// Verify task was correctly parsed (for valid JSON)
-			if tt.expectAck || (tt.expectNack && tt.expectRequeue) {
-				if receivedTask.VideoID != task.VideoID {
-					t.Errorf("received VideoID = %v, want %v", receivedTask.VideoID, task.VideoID)
-				}
-			}
+		_ = client.ConsumeTranscodeTasks(ctx, func(task repository.TranscodeTask) error {
+			return nil
 		})
-	}
+
+		if !ackCalled {
+			t.Error("expected Ack to be called")
+		}
+	})
+
+	t.Run("malformed JSON - nack without requeue", func(t *testing.T) {
+		deliveries := make(chan amqp.Delivery, 1)
+		nackCalled := false
+		nackRequeue := false
+
+		delivery := amqp.Delivery{
+			Body: []byte("invalid json"),
+			Acknowledger: &mockAcknowledger{
+				nackFunc: func(tag uint64, multiple bool, requeue bool) error {
+					nackCalled = true
+					nackRequeue = requeue
+					return nil
+				},
+			},
+		}
+		deliveries <- delivery
+
+		mockCh := &mockChannel{
+			consumeFunc: func(queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args amqp.Table) (<-chan amqp.Delivery, error) {
+				return deliveries, nil
+			},
+		}
+
+		client := &Client{
+			channel: mockCh,
+			config:  ClientConfig{QueueName: "transcode_tasks"},
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		_ = client.ConsumeTranscodeTasks(ctx, func(task repository.TranscodeTask) error {
+			return nil
+		})
+
+		if !nackCalled {
+			t.Error("expected Nack to be called")
+		}
+		if nackRequeue {
+			t.Error("expected Nack requeue=false for malformed JSON")
+		}
+	})
+
+	t.Run("handler error - republish with incremented RetryCount and ack", func(t *testing.T) {
+		deliveries := make(chan amqp.Delivery, 1)
+		ackCalled := false
+		var republishedTask repository.TranscodeTask
+
+		delivery := amqp.Delivery{
+			Body: taskBody,
+			Acknowledger: &mockAcknowledger{
+				ackFunc: func(tag uint64, multiple bool) error {
+					ackCalled = true
+					return nil
+				},
+			},
+		}
+		deliveries <- delivery
+
+		mockCh := &mockChannel{
+			consumeFunc: func(queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args amqp.Table) (<-chan amqp.Delivery, error) {
+				return deliveries, nil
+			},
+			publishWithContextFunc: func(ctx context.Context, exchange, key string, mandatory, immediate bool, msg amqp.Publishing) error {
+				// Capture the republished task
+				_ = json.Unmarshal(msg.Body, &republishedTask)
+				return nil
+			},
+		}
+
+		client := &Client{
+			channel: mockCh,
+			config:  ClientConfig{QueueName: "transcode_tasks", RoutingKey: "transcode_tasks"},
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		_ = client.ConsumeTranscodeTasks(ctx, func(task repository.TranscodeTask) error {
+			return errors.New("processing failed")
+		})
+
+		if !ackCalled {
+			t.Error("expected Ack to be called after successful republish")
+		}
+		if republishedTask.RetryCount != 1 {
+			t.Errorf("republished RetryCount = %d, want 1", republishedTask.RetryCount)
+		}
+		if republishedTask.VideoID != task.VideoID {
+			t.Errorf("republished VideoID = %v, want %v", republishedTask.VideoID, task.VideoID)
+		}
+	})
+
+	t.Run("handler error with republish failure - nack without requeue", func(t *testing.T) {
+		deliveries := make(chan amqp.Delivery, 1)
+		nackCalled := false
+		nackRequeue := false
+
+		delivery := amqp.Delivery{
+			Body: taskBody,
+			Acknowledger: &mockAcknowledger{
+				nackFunc: func(tag uint64, multiple bool, requeue bool) error {
+					nackCalled = true
+					nackRequeue = requeue
+					return nil
+				},
+			},
+		}
+		deliveries <- delivery
+
+		mockCh := &mockChannel{
+			consumeFunc: func(queue, consumer string, autoAck, exclusive, noLocal, noWait bool, args amqp.Table) (<-chan amqp.Delivery, error) {
+				return deliveries, nil
+			},
+			publishWithContextFunc: func(ctx context.Context, exchange, key string, mandatory, immediate bool, msg amqp.Publishing) error {
+				return errors.New("publish failed")
+			},
+		}
+
+		client := &Client{
+			channel: mockCh,
+			config:  ClientConfig{QueueName: "transcode_tasks", RoutingKey: "transcode_tasks"},
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		_ = client.ConsumeTranscodeTasks(ctx, func(task repository.TranscodeTask) error {
+			return errors.New("processing failed")
+		})
+
+		if !nackCalled {
+			t.Error("expected Nack to be called when republish fails")
+		}
+		if nackRequeue {
+			t.Error("expected Nack requeue=false when republish fails")
+		}
+	})
 }
 
 // mockAcknowledger implements amqp.Acknowledger for testing.
