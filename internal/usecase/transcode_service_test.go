@@ -78,17 +78,34 @@ func TestTranscodeService_ProcessTask_Success(t *testing.T) {
 	}
 
 	tc := &mockTranscoder{
-		transcodeToHLSFn: func(ctx context.Context, inputPath, outputDir string) (*transcoder.HLSOutput, error) {
-			// Create mock output files
-			manifestPath := filepath.Join(outputDir, "playlist.m3u8")
-			segmentPath := filepath.Join(outputDir, "segment_000.ts")
+		transcodeToABRFn: func(ctx context.Context, inputPath, outputDir string, variants []transcoder.Variant) (*transcoder.ABROutput, error) {
+			// Create mock output files for ABR
+			masterPath := filepath.Join(outputDir, "master.m3u8")
+			mustWriteFile(t, masterPath, []byte("#EXTM3U\n#EXT-X-VERSION:3\n"))
 
-			mustWriteFile(t, manifestPath, []byte("#EXTM3U\n"))
-			mustWriteFile(t, segmentPath, []byte("mock segment data"))
+			var variantOutputs []transcoder.VariantOutput
+			for _, v := range variants {
+				variantDir := filepath.Join(outputDir, v.Name)
+				if err := os.MkdirAll(variantDir, 0755); err != nil {
+					return nil, err
+				}
 
-			return &transcoder.HLSOutput{
-				ManifestPath: manifestPath,
-				SegmentPaths: []string{segmentPath},
+				manifestPath := filepath.Join(variantDir, "playlist.m3u8")
+				segmentPath := filepath.Join(variantDir, "segment_000.ts")
+
+				mustWriteFile(t, manifestPath, []byte("#EXTM3U\n"))
+				mustWriteFile(t, segmentPath, []byte("mock segment data"))
+
+				variantOutputs = append(variantOutputs, transcoder.VariantOutput{
+					Variant:      v,
+					ManifestPath: manifestPath,
+					SegmentPaths: []string{segmentPath},
+				})
+			}
+
+			return &transcoder.ABROutput{
+				MasterManifestPath: masterPath,
+				Variants:           variantOutputs,
 			}, nil
 		},
 	}
@@ -116,17 +133,26 @@ func TestTranscodeService_ProcessTask_Success(t *testing.T) {
 		t.Errorf("video status: got %s, expected %s", video.Status, model.StatusReady)
 	}
 
-	// Verify HLS URL is set
+	// Verify HLS URL is set (should point to master.m3u8)
 	if video.HLSURL == "" {
 		t.Error("HLS URL should be set")
 	}
-
-	// Verify HLS files were uploaded
-	if _, ok := uploadedFiles["hls/"+videoID.String()+"/playlist.m3u8"]; !ok {
-		t.Error("manifest should be uploaded")
+	expectedHLSURL := "hls/" + videoID.String() + "/master.m3u8"
+	if video.HLSURL != expectedHLSURL {
+		t.Errorf("HLS URL: got %s, expected %s", video.HLSURL, expectedHLSURL)
 	}
-	if _, ok := uploadedFiles["hls/"+videoID.String()+"/segment_000.ts"]; !ok {
-		t.Error("segment should be uploaded")
+
+	// Verify master manifest was uploaded
+	if _, ok := uploadedFiles["hls/"+videoID.String()+"/master.m3u8"]; !ok {
+		t.Error("master manifest should be uploaded")
+	}
+
+	// Verify variant files were uploaded (check one variant)
+	if _, ok := uploadedFiles["hls/"+videoID.String()+"/720p/playlist.m3u8"]; !ok {
+		t.Error("720p playlist should be uploaded")
+	}
+	if _, ok := uploadedFiles["hls/"+videoID.String()+"/720p/segment_000.ts"]; !ok {
+		t.Error("720p segment should be uploaded")
 	}
 }
 
@@ -258,7 +284,7 @@ func TestTranscodeService_ProcessTask_TranscodeError(t *testing.T) {
 	}
 
 	tc := &mockTranscoder{
-		transcodeToHLSFn: func(ctx context.Context, inputPath, outputDir string) (*transcoder.HLSOutput, error) {
+		transcodeToABRFn: func(ctx context.Context, inputPath, outputDir string, variants []transcoder.Variant) (*transcoder.ABROutput, error) {
 			return nil, errors.New("transcode failed")
 		},
 	}
@@ -313,12 +339,12 @@ func TestTranscodeService_ProcessTask_UploadError(t *testing.T) {
 	}
 
 	tc := &mockTranscoder{
-		transcodeToHLSFn: func(ctx context.Context, inputPath, outputDir string) (*transcoder.HLSOutput, error) {
-			manifestPath := filepath.Join(outputDir, "playlist.m3u8")
-			mustWriteFile(t, manifestPath, []byte("#EXTM3U\n"))
-			return &transcoder.HLSOutput{
-				ManifestPath: manifestPath,
-				SegmentPaths: []string{},
+		transcodeToABRFn: func(ctx context.Context, inputPath, outputDir string, variants []transcoder.Variant) (*transcoder.ABROutput, error) {
+			masterPath := filepath.Join(outputDir, "master.m3u8")
+			mustWriteFile(t, masterPath, []byte("#EXTM3U\n"))
+			return &transcoder.ABROutput{
+				MasterManifestPath: masterPath,
+				Variants:           []transcoder.VariantOutput{},
 			}, nil
 		},
 	}
@@ -377,14 +403,28 @@ func TestTranscodeService_ProcessTask_VideoNotInProcessingState(t *testing.T) {
 	}
 
 	tc := &mockTranscoder{
-		transcodeToHLSFn: func(ctx context.Context, inputPath, outputDir string) (*transcoder.HLSOutput, error) {
-			manifestPath := filepath.Join(outputDir, "playlist.m3u8")
-			segmentPath := filepath.Join(outputDir, "segment_000.ts")
-			mustWriteFile(t, manifestPath, []byte("#EXTM3U\n"))
-			mustWriteFile(t, segmentPath, []byte("mock segment"))
-			return &transcoder.HLSOutput{
-				ManifestPath: manifestPath,
-				SegmentPaths: []string{segmentPath},
+		transcodeToABRFn: func(ctx context.Context, inputPath, outputDir string, variants []transcoder.Variant) (*transcoder.ABROutput, error) {
+			masterPath := filepath.Join(outputDir, "master.m3u8")
+			mustWriteFile(t, masterPath, []byte("#EXTM3U\n"))
+
+			var variantOutputs []transcoder.VariantOutput
+			for _, v := range variants {
+				variantDir := filepath.Join(outputDir, v.Name)
+				os.MkdirAll(variantDir, 0755)
+				manifestPath := filepath.Join(variantDir, "playlist.m3u8")
+				segmentPath := filepath.Join(variantDir, "segment_000.ts")
+				mustWriteFile(t, manifestPath, []byte("#EXTM3U\n"))
+				mustWriteFile(t, segmentPath, []byte("mock segment"))
+				variantOutputs = append(variantOutputs, transcoder.VariantOutput{
+					Variant:      v,
+					ManifestPath: manifestPath,
+					SegmentPaths: []string{segmentPath},
+				})
+			}
+
+			return &transcoder.ABROutput{
+				MasterManifestPath: masterPath,
+				Variants:           variantOutputs,
 			}, nil
 		},
 	}
@@ -447,14 +487,28 @@ func TestTranscodeService_ProcessTask_DBUpdateError(t *testing.T) {
 	}
 
 	tc := &mockTranscoder{
-		transcodeToHLSFn: func(ctx context.Context, inputPath, outputDir string) (*transcoder.HLSOutput, error) {
-			manifestPath := filepath.Join(outputDir, "playlist.m3u8")
-			segmentPath := filepath.Join(outputDir, "segment_000.ts")
-			mustWriteFile(t, manifestPath, []byte("#EXTM3U\n"))
-			mustWriteFile(t, segmentPath, []byte("mock segment"))
-			return &transcoder.HLSOutput{
-				ManifestPath: manifestPath,
-				SegmentPaths: []string{segmentPath},
+		transcodeToABRFn: func(ctx context.Context, inputPath, outputDir string, variants []transcoder.Variant) (*transcoder.ABROutput, error) {
+			masterPath := filepath.Join(outputDir, "master.m3u8")
+			mustWriteFile(t, masterPath, []byte("#EXTM3U\n"))
+
+			var variantOutputs []transcoder.VariantOutput
+			for _, v := range variants {
+				variantDir := filepath.Join(outputDir, v.Name)
+				os.MkdirAll(variantDir, 0755)
+				manifestPath := filepath.Join(variantDir, "playlist.m3u8")
+				segmentPath := filepath.Join(variantDir, "segment_000.ts")
+				mustWriteFile(t, manifestPath, []byte("#EXTM3U\n"))
+				mustWriteFile(t, segmentPath, []byte("mock segment"))
+				variantOutputs = append(variantOutputs, transcoder.VariantOutput{
+					Variant:      v,
+					ManifestPath: manifestPath,
+					SegmentPaths: []string{segmentPath},
+				})
+			}
+
+			return &transcoder.ABROutput{
+				MasterManifestPath: masterPath,
+				Variants:           variantOutputs,
 			}, nil
 		},
 	}
