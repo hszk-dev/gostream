@@ -11,6 +11,7 @@ type TranscodeTask struct {
 	VideoID     uuid.UUID `json:"video_id"`
 	OriginalKey string    `json:"original_key"`
 	OutputKey   string    `json:"output_key"`
+	RetryCount  int       `json:"retry_count"`
 }
 
 // MessageQueue defines the interface for message queue operations.
