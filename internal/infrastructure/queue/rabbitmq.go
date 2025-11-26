@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
@@ -181,6 +182,11 @@ func (c *Client) ConsumeTranscodeTasks(ctx context.Context, handler func(task re
 				if pubErr := c.PublishTranscodeTask(ctx, task); pubErr != nil {
 					// Republish failed - discard message to prevent infinite loop
 					// The video will remain in PROCESSING state for manual investigation
+					slog.Error("failed to republish task for retry",
+						"video_id", task.VideoID,
+						"retry_count", task.RetryCount,
+						"error", pubErr,
+					)
 					_ = msg.Nack(false, false)
 				} else {
 					// Republish succeeded - ack original message
