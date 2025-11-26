@@ -187,3 +187,139 @@ func (t *FFmpegTranscoder) collectSegments(outputDir string) ([]string, error) {
 
 	return segments, nil
 }
+
+// DefaultABRVariants returns the default set of quality variants for ABR streaming.
+// These represent common quality levels suitable for most video content.
+func DefaultABRVariants() []Variant {
+	return []Variant{
+		{Name: "1080p", Height: 1080, Bitrate: 5000000},  // ~5 Mbps for Full HD
+		{Name: "720p", Height: 720, Bitrate: 2500000},    // ~2.5 Mbps for HD
+		{Name: "360p", Height: 360, Bitrate: 800000},     // ~800 Kbps for SD
+	}
+}
+
+// TranscodeToABR converts the input video to multiple quality variants for ABR streaming.
+// It processes each variant sequentially and generates a master playlist.
+func (t *FFmpegTranscoder) TranscodeToABR(ctx context.Context, inputPath, outputDir string, variants []Variant) (*ABROutput, error) {
+	if err := t.validateInput(inputPath); err != nil {
+		return nil, err
+	}
+
+	if err := t.validateOutputDir(outputDir); err != nil {
+		return nil, err
+	}
+
+	if len(variants) == 0 {
+		return nil, fmt.Errorf("at least one variant is required")
+	}
+
+	var variantOutputs []VariantOutput
+
+	// Process each variant sequentially
+	// Trade-off: Sequential is simpler and more debuggable than parallel.
+	// Can be optimized later if transcoding time becomes a bottleneck.
+	for _, variant := range variants {
+		variantDir := filepath.Join(outputDir, variant.Name)
+		if err := os.MkdirAll(variantDir, 0755); err != nil {
+			return nil, fmt.Errorf("create variant directory %s: %w", variant.Name, err)
+		}
+
+		output, err := t.transcodeVariant(ctx, inputPath, variantDir, variant)
+		if err != nil {
+			return nil, fmt.Errorf("transcode variant %s: %w", variant.Name, err)
+		}
+
+		variantOutputs = append(variantOutputs, *output)
+	}
+
+	// Generate master playlist after all variants are complete
+	masterPath := filepath.Join(outputDir, "master.m3u8")
+	if err := t.generateMasterPlaylist(masterPath, variantOutputs); err != nil {
+		return nil, fmt.Errorf("generate master playlist: %w", err)
+	}
+
+	return &ABROutput{
+		MasterManifestPath: masterPath,
+		Variants:           variantOutputs,
+	}, nil
+}
+
+// transcodeVariant transcodes the input to a single quality variant.
+func (t *FFmpegTranscoder) transcodeVariant(ctx context.Context, inputPath, variantDir string, variant Variant) (*VariantOutput, error) {
+	manifestPath := filepath.Join(variantDir, "playlist.m3u8")
+	segmentPattern := filepath.Join(variantDir, "segment_%03d.ts")
+
+	args := t.buildVariantFFmpegArgs(inputPath, manifestPath, segmentPattern, variant)
+
+	cmd := exec.CommandContext(ctx, t.config.FFmpegPath, args...)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("transcoding cancelled: %w", ctx.Err())
+		}
+		return nil, fmt.Errorf("ffmpeg execution failed: %w", err)
+	}
+
+	segments, err := t.collectSegments(variantDir)
+	if err != nil {
+		return nil, fmt.Errorf("collect segments: %w", err)
+	}
+
+	return &VariantOutput{
+		Variant:      variant,
+		ManifestPath: manifestPath,
+		SegmentPaths: segments,
+	}, nil
+}
+
+// buildVariantFFmpegArgs constructs FFmpeg arguments for a specific variant.
+func (t *FFmpegTranscoder) buildVariantFFmpegArgs(inputPath, manifestPath, segmentPattern string, variant Variant) []string {
+	scaleFilter := fmt.Sprintf("scale=-2:%d", variant.Height)
+
+	return []string{
+		"-i", inputPath,
+		"-vf", scaleFilter,
+		"-c:v", t.config.VideoCodec,
+		"-preset", t.config.VideoPreset,
+		"-b:v", fmt.Sprintf("%d", variant.Bitrate), // Target video bitrate
+		"-c:a", t.config.AudioCodec,
+		"-f", "hls",
+		"-hls_time", fmt.Sprintf("%d", t.config.HLSSegmentDuration),
+		"-hls_list_size", "0",
+		"-hls_playlist_type", t.config.HLSPlaylistType,
+		"-hls_segment_filename", segmentPattern,
+		"-y",
+		manifestPath,
+	}
+}
+
+// generateMasterPlaylist creates the master.m3u8 file that references all variant playlists.
+func (t *FFmpegTranscoder) generateMasterPlaylist(path string, variants []VariantOutput) error {
+	var sb strings.Builder
+	sb.WriteString("#EXTM3U\n")
+	sb.WriteString("#EXT-X-VERSION:3\n\n")
+
+	for _, v := range variants {
+		// Calculate width assuming 16:9 aspect ratio
+		// This is an approximation; actual width depends on source video
+		width := v.Variant.Height * 16 / 9
+		// Ensure width is even (codec requirement)
+		if width%2 != 0 {
+			width++
+		}
+
+		sb.WriteString(fmt.Sprintf(
+			"#EXT-X-STREAM-INF:BANDWIDTH=%d,RESOLUTION=%dx%d\n",
+			v.Variant.Bitrate, width, v.Variant.Height,
+		))
+		sb.WriteString(fmt.Sprintf("%s/playlist.m3u8\n\n", v.Variant.Name))
+	}
+
+	if err := os.WriteFile(path, []byte(sb.String()), 0644); err != nil {
+		return fmt.Errorf("write master playlist: %w", err)
+	}
+
+	return nil
+}

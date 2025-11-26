@@ -134,11 +134,19 @@ func (m *mockMessageQueue) Close() error {
 // mockTranscoder provides a configurable mock for Transcoder.
 type mockTranscoder struct {
 	transcodeToHLSFn func(ctx context.Context, inputPath, outputDir string) (*transcoder.HLSOutput, error)
+	transcodeToABRFn func(ctx context.Context, inputPath, outputDir string, variants []transcoder.Variant) (*transcoder.ABROutput, error)
 }
 
 func (m *mockTranscoder) TranscodeToHLS(ctx context.Context, inputPath, outputDir string) (*transcoder.HLSOutput, error) {
 	if m.transcodeToHLSFn != nil {
 		return m.transcodeToHLSFn(ctx, inputPath, outputDir)
+	}
+	return nil, nil
+}
+
+func (m *mockTranscoder) TranscodeToABR(ctx context.Context, inputPath, outputDir string, variants []transcoder.Variant) (*transcoder.ABROutput, error) {
+	if m.transcodeToABRFn != nil {
+		return m.transcodeToABRFn(ctx, inputPath, outputDir, variants)
 	}
 	return nil, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -270,4 +271,180 @@ func TestFFmpegTranscoder_TranscodeToHLS_ContextCancellation(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for cancelled context")
 	}
+}
+
+func TestDefaultABRVariants(t *testing.T) {
+	variants := DefaultABRVariants()
+
+	if len(variants) != 3 {
+		t.Fatalf("expected 3 variants, got %d", len(variants))
+	}
+
+	tests := []struct {
+		index   int
+		name    string
+		height  int
+		bitrate int
+	}{
+		{0, "1080p", 1080, 5000000},
+		{1, "720p", 720, 2500000},
+		{2, "360p", 360, 800000},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := variants[tt.index]
+			if v.Name != tt.name {
+				t.Errorf("name: got %q, expected %q", v.Name, tt.name)
+			}
+			if v.Height != tt.height {
+				t.Errorf("height: got %d, expected %d", v.Height, tt.height)
+			}
+			if v.Bitrate != tt.bitrate {
+				t.Errorf("bitrate: got %d, expected %d", v.Bitrate, tt.bitrate)
+			}
+		})
+	}
+}
+
+func TestFFmpegTranscoder_BuildVariantFFmpegArgs(t *testing.T) {
+	cfg := DefaultFFmpegConfig()
+	transcoder := NewFFmpegTranscoder(cfg)
+
+	variant := Variant{Name: "720p", Height: 720, Bitrate: 2500000}
+	args := transcoder.buildVariantFFmpegArgs(
+		"/input/video.mp4",
+		"/output/720p/playlist.m3u8",
+		"/output/720p/segment_%03d.ts",
+		variant,
+	)
+
+	expectedArgs := []string{
+		"-i", "/input/video.mp4",
+		"-vf", "scale=-2:720",
+		"-c:v", "libx264",
+		"-preset", "fast",
+		"-b:v", "2500000",
+		"-c:a", "aac",
+		"-f", "hls",
+		"-hls_time", "6",
+		"-hls_list_size", "0",
+		"-hls_playlist_type", "vod",
+		"-hls_segment_filename", "/output/720p/segment_%03d.ts",
+		"-y",
+		"/output/720p/playlist.m3u8",
+	}
+
+	if len(args) != len(expectedArgs) {
+		t.Fatalf("arg count mismatch: got %d, expected %d", len(args), len(expectedArgs))
+	}
+
+	for i, expected := range expectedArgs {
+		if args[i] != expected {
+			t.Errorf("arg[%d]: got %q, expected %q", i, args[i], expected)
+		}
+	}
+}
+
+func TestFFmpegTranscoder_GenerateMasterPlaylist(t *testing.T) {
+	transcoder := NewFFmpegTranscoder(DefaultFFmpegConfig())
+
+	variants := []VariantOutput{
+		{
+			Variant:      Variant{Name: "1080p", Height: 1080, Bitrate: 5000000},
+			ManifestPath: "/output/1080p/playlist.m3u8",
+			SegmentPaths: []string{"/output/1080p/segment_000.ts"},
+		},
+		{
+			Variant:      Variant{Name: "720p", Height: 720, Bitrate: 2500000},
+			ManifestPath: "/output/720p/playlist.m3u8",
+			SegmentPaths: []string{"/output/720p/segment_000.ts"},
+		},
+		{
+			Variant:      Variant{Name: "360p", Height: 360, Bitrate: 800000},
+			ManifestPath: "/output/360p/playlist.m3u8",
+			SegmentPaths: []string{"/output/360p/segment_000.ts"},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	masterPath := filepath.Join(tmpDir, "master.m3u8")
+
+	err := transcoder.generateMasterPlaylist(masterPath, variants)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	content, err := os.ReadFile(masterPath)
+	if err != nil {
+		t.Fatalf("failed to read master playlist: %v", err)
+	}
+
+	playlist := string(content)
+
+	// Verify header
+	if !strings.Contains(playlist, "#EXTM3U") {
+		t.Error("missing #EXTM3U header")
+	}
+	if !strings.Contains(playlist, "#EXT-X-VERSION:3") {
+		t.Error("missing #EXT-X-VERSION:3")
+	}
+
+	// Verify variants are listed with correct bandwidth and resolution
+	expectedEntries := []struct {
+		bandwidth  string
+		resolution string
+		path       string
+	}{
+		{"BANDWIDTH=5000000", "RESOLUTION=1920x1080", "1080p/playlist.m3u8"},
+		{"BANDWIDTH=2500000", "RESOLUTION=1280x720", "720p/playlist.m3u8"},
+		{"BANDWIDTH=800000", "RESOLUTION=640x360", "360p/playlist.m3u8"},
+	}
+
+	for _, entry := range expectedEntries {
+		if !strings.Contains(playlist, entry.bandwidth) {
+			t.Errorf("missing bandwidth: %s", entry.bandwidth)
+		}
+		if !strings.Contains(playlist, entry.resolution) {
+			t.Errorf("missing resolution: %s", entry.resolution)
+		}
+		if !strings.Contains(playlist, entry.path) {
+			t.Errorf("missing path: %s", entry.path)
+		}
+	}
+}
+
+func TestFFmpegTranscoder_TranscodeToABR_ValidationErrors(t *testing.T) {
+	transcoder := NewFFmpegTranscoder(DefaultFFmpegConfig())
+	ctx := context.Background()
+	variants := DefaultABRVariants()
+
+	t.Run("returns error for non-existent input", func(t *testing.T) {
+		outputDir := t.TempDir()
+		_, err := transcoder.TranscodeToABR(ctx, "/non/existent/input.mp4", outputDir, variants)
+		if err == nil {
+			t.Error("expected error for non-existent input")
+		}
+	})
+
+	t.Run("returns error for non-existent output directory", func(t *testing.T) {
+		inputFile := filepath.Join(t.TempDir(), "input.mp4")
+		os.WriteFile(inputFile, []byte("dummy"), 0644)
+
+		_, err := transcoder.TranscodeToABR(ctx, inputFile, "/non/existent/output", variants)
+		if err == nil {
+			t.Error("expected error for non-existent output directory")
+		}
+	})
+
+	t.Run("returns error for empty variants", func(t *testing.T) {
+		inputFile := filepath.Join(t.TempDir(), "input.mp4")
+		os.WriteFile(inputFile, []byte("dummy"), 0644)
+		outputDir := t.TempDir()
+
+		_, err := transcoder.TranscodeToABR(ctx, inputFile, outputDir, []Variant{})
+		if err == nil {
+			t.Error("expected error for empty variants")
+		}
+	})
 }

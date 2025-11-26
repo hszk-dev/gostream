@@ -69,8 +69,8 @@ func NewTranscodeService(
 }
 
 // ProcessTask handles a transcoding task.
-// It downloads the original video, transcodes to HLS, uploads the results,
-// and updates the video status in the database.
+// It downloads the original video, transcodes to ABR (Adaptive Bitrate) HLS,
+// uploads the results, and updates the video status in the database.
 func (s *transcodeService) ProcessTask(ctx context.Context, task repository.TranscodeTask) error {
 	// Check if max retries exceeded - mark as failed and return nil (ack the message)
 	if task.RetryCount >= s.maxRetries {
@@ -106,20 +106,21 @@ func (s *transcodeService) ProcessTask(ctx context.Context, task repository.Tran
 		return fmt.Errorf("create output directory: %w", err)
 	}
 
-	// Transcode to HLS
-	hlsOutput, err := s.transcoder.TranscodeToHLS(ctx, inputPath, outputDir)
+	// Transcode to ABR (multiple quality variants)
+	variants := transcoder.DefaultABRVariants()
+	abrOutput, err := s.transcoder.TranscodeToABR(ctx, inputPath, outputDir, variants)
 	if err != nil {
 		return fmt.Errorf("transcode: %w", err)
 	}
 
-	// Upload HLS files to object storage
-	manifestKey, err := s.uploadHLSFiles(ctx, task.OutputKey, hlsOutput)
+	// Upload ABR files to object storage
+	masterKey, err := s.uploadABRFiles(ctx, task.OutputKey, abrOutput)
 	if err != nil {
-		return fmt.Errorf("upload HLS files: %w", err)
+		return fmt.Errorf("upload ABR files: %w", err)
 	}
 
 	// Update video status to READY
-	if err := s.markVideoReady(ctx, task.VideoID, manifestKey); err != nil {
+	if err := s.markVideoReady(ctx, task.VideoID, masterKey); err != nil {
 		return fmt.Errorf("update video status: %w", err)
 	}
 
@@ -172,24 +173,35 @@ func (s *transcodeService) downloadOriginal(ctx context.Context, key, workDir st
 	return localPath, nil
 }
 
-// uploadHLSFiles uploads all HLS files (manifest and segments) to object storage.
-// Returns the full key path to the manifest file.
-func (s *transcodeService) uploadHLSFiles(ctx context.Context, outputKeyPrefix string, hlsOutput *transcoder.HLSOutput) (string, error) {
-	// Upload manifest
-	manifestKey := outputKeyPrefix + filepath.Base(hlsOutput.ManifestPath)
-	if err := s.uploadFile(ctx, hlsOutput.ManifestPath, manifestKey, "application/vnd.apple.mpegurl"); err != nil {
-		return "", fmt.Errorf("upload manifest: %w", err)
+// uploadABRFiles uploads all ABR files (master manifest, variant playlists, and segments) to object storage.
+// Returns the full key path to the master manifest file.
+func (s *transcodeService) uploadABRFiles(ctx context.Context, outputKeyPrefix string, abrOutput *transcoder.ABROutput) (string, error) {
+	// Upload master manifest
+	masterKey := outputKeyPrefix + "master.m3u8"
+	if err := s.uploadFile(ctx, abrOutput.MasterManifestPath, masterKey, "application/vnd.apple.mpegurl"); err != nil {
+		return "", fmt.Errorf("upload master manifest: %w", err)
 	}
 
-	// Upload segments
-	for _, segmentPath := range hlsOutput.SegmentPaths {
-		segmentKey := outputKeyPrefix + filepath.Base(segmentPath)
-		if err := s.uploadFile(ctx, segmentPath, segmentKey, "video/mp2t"); err != nil {
-			return "", fmt.Errorf("upload segment %s: %w", filepath.Base(segmentPath), err)
+	// Upload each variant's playlist and segments
+	for _, variant := range abrOutput.Variants {
+		variantPrefix := outputKeyPrefix + variant.Variant.Name + "/"
+
+		// Upload variant playlist
+		playlistKey := variantPrefix + "playlist.m3u8"
+		if err := s.uploadFile(ctx, variant.ManifestPath, playlistKey, "application/vnd.apple.mpegurl"); err != nil {
+			return "", fmt.Errorf("upload %s playlist: %w", variant.Variant.Name, err)
+		}
+
+		// Upload segments
+		for _, segmentPath := range variant.SegmentPaths {
+			segmentKey := variantPrefix + filepath.Base(segmentPath)
+			if err := s.uploadFile(ctx, segmentPath, segmentKey, "video/mp2t"); err != nil {
+				return "", fmt.Errorf("upload %s segment %s: %w", variant.Variant.Name, filepath.Base(segmentPath), err)
+			}
 		}
 	}
 
-	return manifestKey, nil
+	return masterKey, nil
 }
 
 // uploadFile uploads a single file to object storage.
