@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -382,10 +383,10 @@ func TestFFmpegTranscoder_GenerateMasterPlaylist(t *testing.T) {
 	playlist := string(content)
 
 	// Verify header
-	if !contains(playlist, "#EXTM3U") {
+	if !strings.Contains(playlist, "#EXTM3U") {
 		t.Error("missing #EXTM3U header")
 	}
-	if !contains(playlist, "#EXT-X-VERSION:3") {
+	if !strings.Contains(playlist, "#EXT-X-VERSION:3") {
 		t.Error("missing #EXT-X-VERSION:3")
 	}
 
@@ -401,13 +402,13 @@ func TestFFmpegTranscoder_GenerateMasterPlaylist(t *testing.T) {
 	}
 
 	for _, entry := range expectedEntries {
-		if !contains(playlist, entry.bandwidth) {
+		if !strings.Contains(playlist, entry.bandwidth) {
 			t.Errorf("missing bandwidth: %s", entry.bandwidth)
 		}
-		if !contains(playlist, entry.resolution) {
+		if !strings.Contains(playlist, entry.resolution) {
 			t.Errorf("missing resolution: %s", entry.resolution)
 		}
-		if !contains(playlist, entry.path) {
+		if !strings.Contains(playlist, entry.path) {
 			t.Errorf("missing path: %s", entry.path)
 		}
 	}
@@ -446,18 +447,4 @@ func TestFFmpegTranscoder_TranscodeToABR_ValidationErrors(t *testing.T) {
 			t.Error("expected error for empty variants")
 		}
 	})
-}
-
-// contains checks if substr is in s
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
-}
-
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
