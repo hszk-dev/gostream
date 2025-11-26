@@ -3,7 +3,6 @@ package usecase
 import (
 	"context"
 	"errors"
-	"io"
 	"strings"
 	"testing"
 	"time"
@@ -12,105 +11,6 @@ import (
 	"github.com/hszk-dev/gostream/internal/domain/model"
 	"github.com/hszk-dev/gostream/internal/domain/repository"
 )
-
-// Mock implementations
-
-type mockVideoRepository struct {
-	createFn       func(ctx context.Context, video *model.Video) error
-	getByIDFn      func(ctx context.Context, id uuid.UUID) (*model.Video, error)
-	getByUserIDFn  func(ctx context.Context, userID uuid.UUID) ([]*model.Video, error)
-	updateFn       func(ctx context.Context, video *model.Video) error
-	updateStatusFn func(ctx context.Context, id uuid.UUID, status model.Status) error
-}
-
-func (m *mockVideoRepository) Create(ctx context.Context, video *model.Video) error {
-	if m.createFn != nil {
-		return m.createFn(ctx, video)
-	}
-	return nil
-}
-
-func (m *mockVideoRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.Video, error) {
-	if m.getByIDFn != nil {
-		return m.getByIDFn(ctx, id)
-	}
-	return nil, nil
-}
-
-func (m *mockVideoRepository) GetByUserID(ctx context.Context, userID uuid.UUID) ([]*model.Video, error) {
-	if m.getByUserIDFn != nil {
-		return m.getByUserIDFn(ctx, userID)
-	}
-	return nil, nil
-}
-
-func (m *mockVideoRepository) Update(ctx context.Context, video *model.Video) error {
-	if m.updateFn != nil {
-		return m.updateFn(ctx, video)
-	}
-	return nil
-}
-
-func (m *mockVideoRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status model.Status) error {
-	if m.updateStatusFn != nil {
-		return m.updateStatusFn(ctx, id, status)
-	}
-	return nil
-}
-
-type mockObjectStorage struct {
-	generatePresignedUploadURLFn   func(ctx context.Context, key string, expiry time.Duration) (string, error)
-	generatePresignedDownloadURLFn func(ctx context.Context, key string, expiry time.Duration) (string, error)
-}
-
-func (m *mockObjectStorage) GeneratePresignedUploadURL(ctx context.Context, key string, expiry time.Duration) (string, error) {
-	if m.generatePresignedUploadURLFn != nil {
-		return m.generatePresignedUploadURLFn(ctx, key, expiry)
-	}
-	return "http://example.com/upload", nil
-}
-
-func (m *mockObjectStorage) GeneratePresignedDownloadURL(ctx context.Context, key string, expiry time.Duration) (string, error) {
-	if m.generatePresignedDownloadURLFn != nil {
-		return m.generatePresignedDownloadURLFn(ctx, key, expiry)
-	}
-	return "http://example.com/download", nil
-}
-
-func (m *mockObjectStorage) Upload(ctx context.Context, key string, reader io.Reader, contentType string) error {
-	return nil
-}
-
-func (m *mockObjectStorage) Download(ctx context.Context, key string) (io.ReadCloser, error) {
-	return nil, nil
-}
-
-func (m *mockObjectStorage) Delete(ctx context.Context, key string) error {
-	return nil
-}
-
-func (m *mockObjectStorage) Exists(ctx context.Context, key string) (bool, error) {
-	return false, nil
-}
-
-type mockMessageQueue struct {
-	publishTranscodeTaskFn func(ctx context.Context, task repository.TranscodeTask) error
-}
-
-func (m *mockMessageQueue) PublishTranscodeTask(ctx context.Context, task repository.TranscodeTask) error {
-	if m.publishTranscodeTaskFn != nil {
-		return m.publishTranscodeTaskFn(ctx, task)
-	}
-	return nil
-}
-
-func (m *mockMessageQueue) ConsumeTranscodeTasks(ctx context.Context, handler func(task repository.TranscodeTask) error) error {
-	return nil
-}
-
-func (m *mockMessageQueue) Close() error {
-	return nil
-}
 
 func TestVideoService_CreateVideo(t *testing.T) {
 	tests := []struct {
