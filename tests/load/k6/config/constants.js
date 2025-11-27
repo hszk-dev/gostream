@@ -4,11 +4,12 @@
  */
 
 // Thresholds for different scenarios
+// NOTE: Cache hit ratio is measured via Prometheus (gostream_cache_operations_total),
+// not via k6 metrics. Only latency and error rate thresholds are enforced here.
 export const THRESHOLDS = {
   // Scenario A: Viral Video (Singleflight + Redis)
   viral: {
     http_req_duration_p95: 50, // ms
-    cache_hit_ratio: 0.9, // 90%
     error_rate: 0.01, // 1%
   },
 
@@ -16,7 +17,6 @@ export const THRESHOLDS = {
   cdn: {
     manifest_p95: 20, // ms
     segment_p95: 50, // ms
-    cache_hit_ratio: 0.9, // 90%
   },
 
   // Scenario C: Mixed Workload
@@ -43,6 +43,3 @@ export const LATENCY_BUCKETS = {
   acceptable: 50,
   slow: 100,
 };
-
-// Cache inference threshold (responses faster than this are likely cache hits)
-export const CACHE_HIT_THRESHOLD_MS = 5;

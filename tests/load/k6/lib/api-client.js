@@ -3,7 +3,6 @@ import { check } from "k6";
 import { getApiBase, getCdnBase } from "../config/environments.js";
 import { TIMEOUTS } from "../config/constants.js";
 import {
-  recordCacheStatus,
   recordNginxCacheStatus,
   recordLatencyBucket,
   getVideoLatency,
@@ -22,7 +21,10 @@ const defaultParams = {
 
 /**
  * Get video metadata by ID.
- * Records cache and latency metrics.
+ * Records latency metrics.
+ *
+ * NOTE: Cache hit/miss is measured via Prometheus (gostream_cache_operations_total),
+ * not via k6 metrics.
  *
  * @param {string} videoId - Video UUID
  * @returns {Object} Response object with video data
@@ -34,7 +36,6 @@ export function getVideo(videoId) {
 
   // Record metrics
   getVideoLatency.add(durationMs);
-  recordCacheStatus(durationMs);
   recordLatencyBucket(durationMs);
 
   // Validate response

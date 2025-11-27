@@ -223,6 +223,26 @@ services:
   # Load Testing Services (use --profile loadtest)
   # ===========================================================================
 
+  # Prometheus - Metrics storage
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: gostream-prometheus
+    ports:
+      - "9099:9090"
+    volumes:
+      - ./configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=1d'
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - gostream-network
+    profiles:
+      - loadtest
+
   # InfluxDB - k6 metrics storage
   influxdb:
     image: influxdb:1.8

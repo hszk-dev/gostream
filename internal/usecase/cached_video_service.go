@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hszk-dev/gostream/internal/domain/model"
 	"github.com/hszk-dev/gostream/internal/infrastructure/cache"
+	"github.com/hszk-dev/gostream/internal/infrastructure/metrics"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -82,9 +83,16 @@ func (s *cachedVideoService) TriggerProcess(ctx context.Context, videoID uuid.UU
 func (s *cachedVideoService) GetVideo(ctx context.Context, videoID uuid.UUID) (*model.Video, error) {
 	// Use singleflight to coalesce concurrent requests
 	key := videoID.String()
-	result, err, _ := s.sfGroup.Do(key, func() (any, error) {
+	result, err, shared := s.sfGroup.Do(key, func() (any, error) {
 		return s.getVideoWithCache(ctx, videoID)
 	})
+
+	// Record singleflight metrics
+	if shared {
+		metrics.SingleflightRequestsTotal.WithLabelValues(metrics.SingleflightShared).Inc()
+	} else {
+		metrics.SingleflightRequestsTotal.WithLabelValues(metrics.SingleflightInitiated).Inc()
+	}
 
 	if err != nil {
 		return nil, err

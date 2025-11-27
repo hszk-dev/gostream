@@ -50,10 +50,11 @@ lint: ## Run linter
 # Load Testing
 # =============================================================================
 
-loadtest-up: ## Start load test environment (InfluxDB + Grafana)
-	docker compose --profile loadtest up -d influxdb grafana
+loadtest-up: ## Start load test environment (InfluxDB + Grafana + Prometheus)
+	docker compose --profile loadtest up -d influxdb grafana prometheus
 	@echo "Grafana: http://localhost:3001 (admin/admin)"
 	@echo "InfluxDB: http://localhost:8086"
+	@echo "Prometheus: http://localhost:9099"
 
 loadtest-down: ## Stop load test environment
 	docker compose --profile loadtest down

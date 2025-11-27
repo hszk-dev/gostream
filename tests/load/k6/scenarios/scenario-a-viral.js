@@ -38,12 +38,9 @@ export const options = {
     http_req_duration: [`p(95)<${THRESHOLDS.viral.http_req_duration_p95}`],
     get_video_latency: [`p(95)<${THRESHOLDS.viral.http_req_duration_p95}`],
 
-    // Cache effectiveness (soft thresholds - latency-based inference is imprecise)
-    // NOTE: These metrics use response time inference (<5ms = HIT), which is inaccurate.
-    // Actual cache effectiveness should be verified via pg_stat_statements or
-    // Prometheus metrics (Phase 1.5). See: gostream_cache_operations_total
-    cache_hit_rate: [{ threshold: `rate>${THRESHOLDS.viral.cache_hit_ratio}`, abortOnFail: false }],
-    singleflight_effectiveness: [{ threshold: `rate>${THRESHOLDS.viral.cache_hit_ratio}`, abortOnFail: false }],
+    // NOTE: Cache hit rate and singleflight effectiveness are measured via Prometheus
+    // (gostream_cache_operations_total, gostream_singleflight_requests_total).
+    // Check Grafana dashboard for accurate metrics.
 
     // Error rate
     http_req_failed: [`rate<${THRESHOLDS.viral.error_rate}`],
@@ -111,6 +108,7 @@ export function teardown(data) {
 
 /**
  * Custom summary handler for detailed results.
+ * NOTE: Cache hit rate is measured via Prometheus - check Grafana dashboard.
  */
 export function handleSummary(data) {
   const summary = {
@@ -122,7 +120,6 @@ export function handleSummary(data) {
       avgDuration: data.metrics.http_req_duration?.values?.avg || 0,
       p95Duration: data.metrics.http_req_duration?.values["p(95)"] || 0,
       p99Duration: data.metrics.http_req_duration?.values["p(99)"] || 0,
-      cacheHitRate: data.metrics.cache_hit_rate?.values?.rate || 0,
       errorRate: data.metrics.http_req_failed?.values?.rate || 0,
     },
     thresholds: {
@@ -137,9 +134,9 @@ export function handleSummary(data) {
   console.log(`Avg Duration: ${summary.metrics.avgDuration.toFixed(2)}ms`);
   console.log(`p95 Duration: ${summary.metrics.p95Duration.toFixed(2)}ms`);
   console.log(`p99 Duration: ${summary.metrics.p99Duration.toFixed(2)}ms`);
-  console.log(`Cache Hit Rate: ${(summary.metrics.cacheHitRate * 100).toFixed(1)}%`);
   console.log(`Error Rate: ${(summary.metrics.errorRate * 100).toFixed(2)}%`);
   console.log(`All Thresholds Passed: ${summary.thresholds.passed}`);
+  console.log("NOTE: Check Grafana for cache hit rate (Prometheus)");
   console.log("==========================================\n");
 
   return {

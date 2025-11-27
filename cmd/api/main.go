@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/hszk-dev/gostream/internal/api/handler"
@@ -144,6 +145,7 @@ func setupRouter(logger *slog.Logger, videoHandler *handler.VideoHandler) *chi.M
 	r.Use(middleware.Recoverer(logger))
 
 	r.Get("/health", handler.Health)
+	r.Handle("/metrics", promhttp.Handler())
 
 	r.Route("/v1", func(r chi.Router) {
 		r.Route("/videos", func(r chi.Router) {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hszk-dev/gostream/internal/domain/model"
+	"github.com/hszk-dev/gostream/internal/infrastructure/metrics"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -50,16 +51,28 @@ func (c *RedisVideoCache) Get(ctx context.Context, videoID uuid.UUID) (*model.Vi
 	data, err := c.client.Get(ctx, key).Bytes()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
+			metrics.CacheOperationsTotal.WithLabelValues(
+				metrics.CacheOpGet, metrics.CacheStatusMiss, metrics.CacheTypeRedis,
+			).Inc()
 			return nil, nil // Cache miss
 		}
+		metrics.CacheOperationsTotal.WithLabelValues(
+			metrics.CacheOpGet, metrics.CacheStatusError, metrics.CacheTypeRedis,
+		).Inc()
 		return nil, fmt.Errorf("redis get: %w", err)
 	}
 
 	video, err := c.deserialize(data)
 	if err != nil {
+		metrics.CacheOperationsTotal.WithLabelValues(
+			metrics.CacheOpGet, metrics.CacheStatusError, metrics.CacheTypeRedis,
+		).Inc()
 		return nil, fmt.Errorf("deserialize video: %w", err)
 	}
 
+	metrics.CacheOperationsTotal.WithLabelValues(
+		metrics.CacheOpGet, metrics.CacheStatusHit, metrics.CacheTypeRedis,
+	).Inc()
 	return video, nil
 }
 
@@ -69,13 +82,22 @@ func (c *RedisVideoCache) Set(ctx context.Context, video *model.Video, ttl time.
 
 	data, err := c.serialize(video)
 	if err != nil {
+		metrics.CacheOperationsTotal.WithLabelValues(
+			metrics.CacheOpSet, metrics.CacheStatusError, metrics.CacheTypeRedis,
+		).Inc()
 		return fmt.Errorf("serialize video: %w", err)
 	}
 
 	if err := c.client.Set(ctx, key, data, ttl).Err(); err != nil {
+		metrics.CacheOperationsTotal.WithLabelValues(
+			metrics.CacheOpSet, metrics.CacheStatusError, metrics.CacheTypeRedis,
+		).Inc()
 		return fmt.Errorf("redis set: %w", err)
 	}
 
+	metrics.CacheOperationsTotal.WithLabelValues(
+		metrics.CacheOpSet, metrics.CacheStatusSuccess, metrics.CacheTypeRedis,
+	).Inc()
 	return nil
 }
 
@@ -84,9 +106,15 @@ func (c *RedisVideoCache) Delete(ctx context.Context, videoID uuid.UUID) error {
 	key := c.buildKey(videoID)
 
 	if err := c.client.Del(ctx, key).Err(); err != nil {
+		metrics.CacheOperationsTotal.WithLabelValues(
+			metrics.CacheOpDelete, metrics.CacheStatusError, metrics.CacheTypeRedis,
+		).Inc()
 		return fmt.Errorf("redis del: %w", err)
 	}
 
+	metrics.CacheOperationsTotal.WithLabelValues(
+		metrics.CacheOpDelete, metrics.CacheStatusSuccess, metrics.CacheTypeRedis,
+	).Inc()
 	return nil
 }
 

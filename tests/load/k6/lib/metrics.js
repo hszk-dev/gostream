@@ -1,24 +1,19 @@
 import { Counter, Rate, Trend } from "k6/metrics";
-import { CACHE_HIT_THRESHOLD_MS, LATENCY_BUCKETS } from "../config/constants.js";
+import { LATENCY_BUCKETS } from "../config/constants.js";
 
 /**
  * Custom metrics for load testing
- * Tracks cache performance, singleflight effectiveness, and latency distribution.
+ * Tracks Nginx CDN cache and latency distribution.
+ *
+ * NOTE: Redis cache and singleflight metrics are measured via Prometheus
+ * (gostream_cache_operations_total, gostream_singleflight_requests_total)
+ * for accurate measurement. Latency-based inference was removed due to inaccuracy.
  */
-
-// Cache Metrics
-export const cacheHits = new Counter("cache_hits");
-export const cacheMisses = new Counter("cache_misses");
-export const cacheHitRate = new Rate("cache_hit_rate");
 
 // Nginx Cache Metrics (based on X-Cache-Status header)
 export const nginxCacheHits = new Counter("nginx_cache_hits");
 export const nginxCacheMisses = new Counter("nginx_cache_misses");
 export const nginxCacheHitRate = new Rate("nginx_cache_hit_rate");
-
-// Singleflight Metrics (inferred from response time)
-export const singleflightCoalesced = new Counter("singleflight_coalesced");
-export const singleflightEffectiveness = new Rate("singleflight_effectiveness");
 
 // Latency Distribution
 export const latencyUnder10ms = new Counter("latency_under_10ms");
@@ -30,24 +25,6 @@ export const latencyOver100ms = new Counter("latency_over_100ms");
 export const getVideoLatency = new Trend("get_video_latency", true);
 export const hlsManifestLatency = new Trend("hls_manifest_latency", true);
 export const hlsSegmentLatency = new Trend("hls_segment_latency", true);
-
-/**
- * Record cache status based on response time inference.
- * Responses faster than CACHE_HIT_THRESHOLD_MS are considered cache hits.
- *
- * @param {number} durationMs - Response time in milliseconds
- */
-export function recordCacheStatus(durationMs) {
-  const isHit = durationMs < CACHE_HIT_THRESHOLD_MS;
-  if (isHit) {
-    cacheHits.add(1);
-    singleflightCoalesced.add(1);
-  } else {
-    cacheMisses.add(1);
-  }
-  cacheHitRate.add(isHit);
-  singleflightEffectiveness.add(isHit);
-}
 
 /**
  * Record Nginx cache status from X-Cache-Status header.
