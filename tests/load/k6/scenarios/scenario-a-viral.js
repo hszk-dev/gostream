@@ -38,9 +38,12 @@ export const options = {
     http_req_duration: [`p(95)<${THRESHOLDS.viral.http_req_duration_p95}`],
     get_video_latency: [`p(95)<${THRESHOLDS.viral.http_req_duration_p95}`],
 
-    // Cache effectiveness
-    cache_hit_rate: [`rate>${THRESHOLDS.viral.cache_hit_ratio}`],
-    singleflight_effectiveness: [`rate>${THRESHOLDS.viral.cache_hit_ratio}`],
+    // Cache effectiveness (soft thresholds - latency-based inference is imprecise)
+    // NOTE: These metrics use response time inference (<5ms = HIT), which is inaccurate.
+    // Actual cache effectiveness should be verified via pg_stat_statements or
+    // Prometheus metrics (Phase 1.5). See: gostream_cache_operations_total
+    cache_hit_rate: [{ threshold: `rate>${THRESHOLDS.viral.cache_hit_ratio}`, abortOnFail: false }],
+    singleflight_effectiveness: [{ threshold: `rate>${THRESHOLDS.viral.cache_hit_ratio}`, abortOnFail: false }],
 
     // Error rate
     http_req_failed: [`rate<${THRESHOLDS.viral.error_rate}`],
