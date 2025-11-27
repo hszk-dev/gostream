@@ -9,8 +9,11 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/redis/go-redis/v9"
+
 	"github.com/hszk-dev/gostream/internal/config"
 	"github.com/hszk-dev/gostream/internal/domain/repository"
+	"github.com/hszk-dev/gostream/internal/infrastructure/cache"
 	"github.com/hszk-dev/gostream/internal/infrastructure/postgres"
 	"github.com/hszk-dev/gostream/internal/infrastructure/queue"
 	"github.com/hszk-dev/gostream/internal/infrastructure/storage"
@@ -71,15 +74,30 @@ func run() error {
 	defer queueClient.Close()
 	logger.Info("connected to RabbitMQ")
 
+	// Initialize Redis client for cache invalidation
+	redisClient := redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Addr(),
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})
+	defer redisClient.Close()
+
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("failed to connect to Redis: %w", err)
+	}
+	logger.Info("connected to Redis")
+
 	// Initialize transcoder
 	tc := transcoder.NewFFmpegTranscoder(transcoder.DefaultFFmpegConfig())
 
 	// Initialize repository and service
 	videoRepo := postgres.NewVideoRepository(pgClient.Pool())
+	videoCache := cache.NewRedisVideoCache(redisClient)
 	transcodeSvc := usecase.NewTranscodeService(
 		videoRepo,
 		storageClient,
 		tc,
+		videoCache,
 		usecase.TranscodeServiceConfig{
 			TempDir:    cfg.Worker.TempDir,
 			MaxRetries: cfg.Worker.MaxRetries,

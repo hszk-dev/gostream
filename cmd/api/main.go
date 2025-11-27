@@ -11,10 +11,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/hszk-dev/gostream/internal/api/handler"
 	"github.com/hszk-dev/gostream/internal/api/middleware"
 	"github.com/hszk-dev/gostream/internal/config"
+	"github.com/hszk-dev/gostream/internal/infrastructure/cache"
 	"github.com/hszk-dev/gostream/internal/infrastructure/postgres"
 	"github.com/hszk-dev/gostream/internal/infrastructure/queue"
 	"github.com/hszk-dev/gostream/internal/infrastructure/storage"
@@ -69,9 +71,28 @@ func run() error {
 	defer queueClient.Close()
 	logger.Info("connected to RabbitMQ")
 
+	// Initialize Redis client
+	redisClient := redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Addr(),
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})
+	defer redisClient.Close()
+
+	if err := redisClient.Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("failed to connect to Redis: %w", err)
+	}
+	logger.Info("connected to Redis")
+
 	// Initialize repositories and services
 	videoRepo := postgres.NewVideoRepository(pgClient.Pool())
-	videoSvc := usecase.NewVideoService(videoRepo, storageClient, queueClient, usecase.DefaultVideoServiceConfig())
+	videoCache := cache.NewRedisVideoCache(redisClient)
+
+	baseVideoSvc := usecase.NewVideoService(videoRepo, storageClient, queueClient, usecase.DefaultVideoServiceConfig())
+	videoSvc := usecase.NewCachedVideoService(baseVideoSvc, videoCache, usecase.CachedVideoServiceConfig{
+		CacheTTL:   cfg.Redis.TTL,
+		CDNBaseURL: cfg.CDN.BaseURL,
+	})
 
 	// Initialize handlers
 	videoHandler := handler.NewVideoHandler(videoSvc)
