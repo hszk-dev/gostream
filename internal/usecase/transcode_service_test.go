@@ -114,7 +114,7 @@ func TestTranscodeService_ProcessTask_Success(t *testing.T) {
 		TempDir:    tempDir,
 		MaxRetries: 3,
 	}
-	svc := NewTranscodeService(repo, storage, tc, cfg)
+	svc := NewTranscodeService(repo, storage, tc, nil, cfg)
 
 	task := repository.TranscodeTask{
 		VideoID:     videoID,
@@ -186,7 +186,7 @@ func TestTranscodeService_ProcessTask_MaxRetriesExceeded(t *testing.T) {
 		TempDir:    t.TempDir(),
 		MaxRetries: 3,
 	}
-	svc := NewTranscodeService(repo, storage, tc, cfg)
+	svc := NewTranscodeService(repo, storage, tc, nil, cfg)
 
 	task := repository.TranscodeTask{
 		VideoID:    videoID,
@@ -236,7 +236,7 @@ func TestTranscodeService_ProcessTask_DownloadError(t *testing.T) {
 		TempDir:    t.TempDir(),
 		MaxRetries: 3,
 	}
-	svc := NewTranscodeService(repo, storage, tc, cfg)
+	svc := NewTranscodeService(repo, storage, tc, nil, cfg)
 
 	task := repository.TranscodeTask{
 		VideoID:     videoID,
@@ -293,7 +293,7 @@ func TestTranscodeService_ProcessTask_TranscodeError(t *testing.T) {
 		TempDir:    t.TempDir(),
 		MaxRetries: 3,
 	}
-	svc := NewTranscodeService(repo, storage, tc, cfg)
+	svc := NewTranscodeService(repo, storage, tc, nil, cfg)
 
 	task := repository.TranscodeTask{
 		VideoID:     videoID,
@@ -353,7 +353,7 @@ func TestTranscodeService_ProcessTask_UploadError(t *testing.T) {
 		TempDir:    t.TempDir(),
 		MaxRetries: 3,
 	}
-	svc := NewTranscodeService(repo, storage, tc, cfg)
+	svc := NewTranscodeService(repo, storage, tc, nil, cfg)
 
 	task := repository.TranscodeTask{
 		VideoID:     videoID,
@@ -433,7 +433,7 @@ func TestTranscodeService_ProcessTask_VideoNotInProcessingState(t *testing.T) {
 		TempDir:    t.TempDir(),
 		MaxRetries: 3,
 	}
-	svc := NewTranscodeService(repo, storage, tc, cfg)
+	svc := NewTranscodeService(repo, storage, tc, nil, cfg)
 
 	task := repository.TranscodeTask{
 		VideoID:     videoID,
@@ -517,7 +517,7 @@ func TestTranscodeService_ProcessTask_DBUpdateError(t *testing.T) {
 		TempDir:    t.TempDir(),
 		MaxRetries: 3,
 	}
-	svc := NewTranscodeService(repo, storage, tc, cfg)
+	svc := NewTranscodeService(repo, storage, tc, nil, cfg)
 
 	task := repository.TranscodeTask{
 		VideoID:     videoID,
