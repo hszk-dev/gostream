@@ -1,4 +1,5 @@
-.PHONY: help up down logs ps migrate-up migrate-down migrate-create clean build run test lint
+.PHONY: help up down logs ps migrate-up migrate-down migrate-create clean build run test lint \
+	loadtest-up loadtest-down loadtest-setup loadtest-viral loadtest-clear-cache loadtest-check-db
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -44,3 +45,33 @@ test: ## Run tests
 
 lint: ## Run linter
 	golangci-lint run ./...
+
+# =============================================================================
+# Load Testing
+# =============================================================================
+
+loadtest-up: ## Start load test environment (InfluxDB + Grafana)
+	docker compose --profile loadtest up -d influxdb grafana
+	@echo "Grafana: http://localhost:3001 (admin/admin)"
+	@echo "InfluxDB: http://localhost:8086"
+
+loadtest-down: ## Stop load test environment
+	docker compose --profile loadtest down
+
+loadtest-setup: ## Setup test data for load testing
+	./tests/load/scripts/setup-test-data.sh
+
+loadtest-viral: ## Run Scenario A: Viral Video (Singleflight test)
+	@if [ -f .loadtest.env ]; then . ./.loadtest.env; fi && \
+	docker compose --profile loadtest run --rm \
+		-e TEST_VIDEO_ID="$${TEST_VIDEO_ID}" \
+		k6 run --out influxdb=http://influxdb:8086/k6 /tests/scenarios/scenario-a-viral.js
+
+loadtest-clear-cache: ## Clear Redis and Nginx caches
+	./tests/load/scripts/clear-caches.sh
+
+loadtest-check-db: ## Check DB query statistics (pg_stat_statements)
+	./tests/load/scripts/check-db-queries.sh
+
+loadtest-check-db-reset: ## Reset DB query statistics before load test
+	./tests/load/scripts/check-db-queries.sh --reset
