@@ -12,6 +12,7 @@ import (
 
 	"github.com/hszk-dev/gostream/internal/domain/model"
 	"github.com/hszk-dev/gostream/internal/domain/repository"
+	"github.com/hszk-dev/gostream/internal/infrastructure/metrics"
 )
 
 // DBTX is an interface that abstracts pgxpool.Pool and pgx.Tx for testability.
@@ -37,6 +38,8 @@ func (r *VideoRepository) Create(ctx context.Context, video *model.Video) error 
 		INSERT INTO videos (id, user_id, title, status, original_url, hls_url, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`
+
+	metrics.DBQueriesTotal.WithLabelValues(metrics.DBQueryInsert, metrics.TableVideos).Inc()
 
 	_, err := r.db.Exec(ctx, query,
 		video.ID,
@@ -67,6 +70,8 @@ func (r *VideoRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.Vid
 		WHERE id = $1
 	`
 
+	metrics.DBQueriesTotal.WithLabelValues(metrics.DBQuerySelect, metrics.TableVideos).Inc()
+
 	video, err := r.scanVideo(r.db.QueryRow(ctx, query, id))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -86,6 +91,8 @@ func (r *VideoRepository) GetByUserID(ctx context.Context, userID uuid.UUID) ([]
 		WHERE user_id = $1
 		ORDER BY created_at DESC
 	`
+
+	metrics.DBQueriesTotal.WithLabelValues(metrics.DBQuerySelect, metrics.TableVideos).Inc()
 
 	rows, err := r.db.Query(ctx, query, userID)
 	if err != nil {
@@ -117,6 +124,8 @@ func (r *VideoRepository) Update(ctx context.Context, video *model.Video) error 
 		WHERE id = $1
 	`
 
+	metrics.DBQueriesTotal.WithLabelValues(metrics.DBQueryUpdate, metrics.TableVideos).Inc()
+
 	video.UpdatedAt = time.Now()
 
 	tag, err := r.db.Exec(ctx, query,
@@ -145,6 +154,8 @@ func (r *VideoRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status
 		SET status = $2, updated_at = $3
 		WHERE id = $1
 	`
+
+	metrics.DBQueriesTotal.WithLabelValues(metrics.DBQueryUpdate, metrics.TableVideos).Inc()
 
 	tag, err := r.db.Exec(ctx, query, id, status.String(), time.Now())
 	if err != nil {
