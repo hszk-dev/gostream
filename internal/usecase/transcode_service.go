@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hszk-dev/gostream/internal/domain/model"
 	"github.com/hszk-dev/gostream/internal/domain/repository"
+	"github.com/hszk-dev/gostream/internal/infrastructure/cache"
 	"github.com/hszk-dev/gostream/internal/transcoder"
 )
 
@@ -47,22 +48,26 @@ type transcodeService struct {
 	repo       repository.VideoRepository
 	storage    repository.ObjectStorage
 	transcoder transcoder.Transcoder
+	cache      cache.VideoCache
 
 	tempDir    string
 	maxRetries int
 }
 
 // NewTranscodeService creates a new TranscodeService instance.
+// The cache parameter is optional - pass nil to disable cache invalidation.
 func NewTranscodeService(
 	repo repository.VideoRepository,
 	storage repository.ObjectStorage,
 	tc transcoder.Transcoder,
+	videoCache cache.VideoCache,
 	cfg TranscodeServiceConfig,
 ) TranscodeService {
 	return &transcodeService{
 		repo:       repo,
 		storage:    storage,
 		transcoder: tc,
+		cache:      videoCache,
 		tempDir:    cfg.TempDir,
 		maxRetries: cfg.MaxRetries,
 	}
@@ -241,6 +246,9 @@ func (s *transcodeService) markVideoReady(ctx context.Context, videoID uuid.UUID
 		return fmt.Errorf("update video: %w", err)
 	}
 
+	// Invalidate cache to ensure fresh data on next read
+	s.invalidateCache(ctx, videoID)
+
 	return nil
 }
 
@@ -264,5 +272,23 @@ func (s *transcodeService) markVideoFailed(ctx context.Context, videoID uuid.UUI
 		return fmt.Errorf("update video: %w", err)
 	}
 
+	// Invalidate cache to ensure fresh data on next read
+	s.invalidateCache(ctx, videoID)
+
 	return nil
+}
+
+// invalidateCache removes a video from cache.
+// Errors are logged but not propagated - cache invalidation is non-critical.
+func (s *transcodeService) invalidateCache(ctx context.Context, videoID uuid.UUID) {
+	if s.cache == nil {
+		return
+	}
+
+	if err := s.cache.Delete(ctx, videoID); err != nil {
+		slog.Warn("failed to invalidate video cache",
+			"video_id", videoID,
+			"error", err,
+		)
+	}
 }
